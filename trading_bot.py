@@ -3,81 +3,114 @@ import pandas as pd
 import numpy as np
 import talib
 import time
+import logging
+import xgboost as xgb
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-import xgboost as xgb
+from config import API_KEY, API_SECRET, SYMBOL, TIMEFRAME
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class TradingBot:
-    def __init__(self, symbol="BTC/USDT", timeframe="1h"):
+    def __init__(self, symbol=SYMBOL, timeframe=TIMEFRAME):
         self.symbol = symbol
         self.timeframe = timeframe
-        self.exchange = ccxt.binance()
+        self.binance = ccxt.binance({
+            "apiKey": API_KEY,
+            "secret": API_SECRET,
+            "options": {"defaultType": "spot"},
+        })
         self.model = None
         self.scaler = None
-        self.data = None
 
     def fetch_data(self, limit=100):
-        print("📊 Mengambil data dari Binance...")
-        bars = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=limit)
+        """Mengambil data pasar dari Binance."""
+        logging.info(f"📊 Mengambil data {self.symbol} dari Binance...")
+        bars = self.binance.fetch_ohlcv(self.symbol, self.timeframe, limit=limit)
         df = pd.DataFrame(bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
         # Tambahkan indikator teknikal
         df["RSI"] = talib.RSI(df["close"], timeperiod=14)
-        macd, macdsignal, macdhist = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
+        macd, macdsignal, _ = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
         df["MACD"] = macd
         df["MACD_Signal"] = macdsignal
         df["Upper_BB"], df["Middle_BB"], df["Lower_BB"] = talib.BBANDS(df["close"], timeperiod=20)
 
-        # Buat target: apakah harga naik atau turun di candle berikutnya
+        # Buat target: 1 jika harga naik, 0 jika turun
         df["Target"] = np.where(df["close"].shift(-1) > df["close"], 1, 0)
 
-        # Hapus nilai NaN
+        # Hapus baris dengan NaN
         df.dropna(inplace=True)
-        self.data = df
-        print("✅ Data berhasil diambil dan diproses.")
+        df.to_csv(f"{self.symbol.replace('/', '_')}_data.csv", index=False)
+        logging.info(f"✅ Data {self.symbol} disimpan ke CSV.")
+        return df
 
-    def train_model(self):
-        print("📈 Melatih model Machine Learning...")
+    def train_model(self, data):
+        """Melatih model Machine Learning (XGBoost)."""
+        logging.info("📈 Melatih model Machine Learning...")
 
         features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
-        X = self.data[features]
-        y = self.data["Target"]
+        X = data[features]
+        y = data["Target"]
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
+        # Normalisasi data
         self.scaler = StandardScaler()
-        X_train = self.scaler.fit_transform(X_train)
-        X_test = self.scaler.transform(X_test)
+        X_scaled = self.scaler.fit_transform(X)
 
+        # Pisahkan data untuk training dan testing
+        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+
+        # Inisialisasi dan latih model XGBoost
         self.model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
         self.model.fit(X_train, y_train)
 
+        # Evaluasi akurasi model
         accuracy = self.model.score(X_test, y_test)
-        print(f"✅ Model Training Selesai! Akurasi: {accuracy * 100:.2f}%")
+        logging.info(f"✅ Model Training Selesai! Akurasi: {accuracy * 100:.2f}%")
 
     def analyze_market(self):
-        """Menganalisis pasar dan memberikan sinyal trading."""
-        latest = self.data.iloc[-1]  # Ambil data terbaru
-        print(f"📊 Harga: {latest['close']}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
+        """Menganalisis pasar menggunakan model ML dan eksekusi trading."""
+        self.data = self.fetch_data(limit=50)
+        latest = self.data.iloc[-1]
 
-        # Persiapkan data terbaru untuk model
-        X_latest = pd.DataFrame([latest[["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]]])
-        X_latest = self.scaler.transform(X_latest)
+        logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
 
-        # Prediksi menggunakan model ML
-        prediction = self.model.predict(X_latest)[0]
+        # Gunakan model ML untuk prediksi
+        features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
+        X_latest = latest[features].values.reshape(1, -1)
+        X_latest_scaled = self.scaler.transform(X_latest)
+        prediction = self.model.predict(X_latest_scaled)[0]
 
         if prediction == 1:
-            print("✅ Model ML memprediksi: BELI")
-            self.buy()
+            logging.info("✅ Model ML memprediksi: BUY SIGNAL")
+            self.place_order("buy")
         else:
-            print("❌ Model ML memprediksi: Tidak ada aksi")
+            logging.info("❌ Model ML memprediksi: Tidak ada aksi")
 
-    def buy(self):
-        """Menjalankan order beli (dummy, tanpa eksekusi langsung ke Binance)."""
-        print(f"🟢 Membeli {self.symbol}")
+    def place_order(self, order_type):
+        """Menempatkan order di Binance."""
+        amount = 0.001  # Bisa disesuaikan
+        try:
+            if order_type == "buy":
+                order = self.binance.create_market_buy_order(self.symbol, amount)
+            else:
+                order = self.binance.create_market_sell_order(self.symbol, amount)
 
-    def sell(self):
-        """Menjalankan order jual (dummy, tanpa eksekusi langsung ke Binance)."""
-        print(f"🔴 Menjual {self.symbol}")
+            logging.info(f"✅ Order {order_type.upper()} berhasil: {order}")
+        except Exception as e:
+            logging.error(f"❌ Gagal mengeksekusi order: {e}")
+
+    def run(self):
+        """Menjalankan bot trading secara otomatis."""
+        logging.info("🚀 Memulai bot trading...")
+
+        # Ambil data dan latih model
+        self.data = self.fetch_data()
+        self.train_model(self.data)
+
+        # Loop analisis pasar
+        while True:
+            self.analyze_market()
+            time.sleep(60)  # Tunggu 1 menit sebelum analisis berikutnya
