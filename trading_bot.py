@@ -2,105 +2,107 @@ import ccxt
 import pandas as pd
 import numpy as np
 import talib
+import time
 import logging
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import xgboost as xgb
 
-class TradingBot:
-    def __init__(self, symbol="BTC/USDT", timeframe="1h"):
-        self.symbol = symbol
-        self.timeframe = timeframe
-        self.api_key = "6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj"
-        self.api_secret = "HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0"
+# Konfigurasi Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-        # ✅ Gunakan akun real Binance
-        self.exchange = ccxt.binance({
-            "apiKey": self.api_key,
-            "secret": self.api_secret,
-            "options": {"defaultType": "spot"}
-        })
+# Masukkan API Key Binance
+api_key = "6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj"
+api_secret = "HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0"
 
-        self.model = None
-        self.scaler = None
+# Inisialisasi Binance
+binance = ccxt.binance({
+    "apiKey": api_key,
+    "secret": api_secret,
+    "options": {"defaultType": "spot"}
+})
 
-    # ✅ Ambil data candlestick
-    def get_ohlcv(self):
-        logging.info(f"📊 Mengambil data {self.symbol} dari Binance...")
-        bars = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=100)
-        df = pd.DataFrame(bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        return df
+# Fungsi untuk mengambil data candlestick
+def get_ohlcv(symbol="BTC/USDT", timeframe="1h", limit=100):
+    logging.info(f"📊 Mengambil data {symbol} dari Binance...")
+    bars = binance.fetch_ohlcv(symbol, timeframe, limit=limit)
+    df = pd.DataFrame(bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    return df
 
-    # ✅ Hitung indikator teknikal
-    def calculate_indicators(self, df):
-        df["RSI"] = talib.RSI(df["close"], timeperiod=14)
-        macd, macdsignal, _ = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
-        df["MACD"] = macd
-        df["MACD_Signal"] = macdsignal
-        upper, middle, lower = talib.BBANDS(df["close"], timeperiod=20)
-        df["Upper_BB"] = upper
-        df["Middle_BB"] = middle
-        df["Lower_BB"] = lower
-        df.dropna(inplace=True)
-        return df
+# Fungsi untuk menghitung indikator teknikal
+def calculate_indicators(df):
+    df["RSI"] = talib.RSI(df["close"], timeperiod=14)
 
-    # ✅ Simpan data ke CSV
-    def save_data_to_csv(self):
-        df = self.get_ohlcv()
-        filename = f"{self.symbol.replace('/', '_')}_data.csv"
-        df.to_csv(filename, index=False)
-        logging.info(f"✅ Data {self.symbol} disimpan ke {filename}")
+    macd, macdsignal, macdhist = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
+    df["MACD"] = macd
+    df["MACD_Signal"] = macdsignal
 
-    # ✅ Latih model Machine Learning
-    def train_model(self):
-        logging.info("📈 Melatih model Machine Learning...")
-        df = self.get_ohlcv()
-        df = self.calculate_indicators(df)
-        df["Target"] = np.where(df["close"].shift(-1) > df["close"], 1, 0)
+    upper, middle, lower = talib.BBANDS(df["close"], timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
+    df["Upper_BB"] = upper
+    df["Middle_BB"] = middle
+    df["Lower_BB"] = lower
 
-        features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
-        X = df[features]
-        y = df["Target"]
+    return df.dropna()
 
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
+# Fungsi untuk melatih model ML
+def train_model(df):
+    logging.info("📈 Melatih model Machine Learning...")
 
-        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
-        self.model = xgb.XGBClassifier()
-        self.model.fit(X_train, y_train)
+    df = calculate_indicators(df)
 
-        accuracy = self.model.score(X_test, y_test)
-        logging.info(f"✅ Model Training Selesai! Akurasi: {accuracy * 100:.2f}%")
+    df["Target"] = np.where(df["close"].shift(-1) > df["close"], 1, 0)
 
-    # ✅ Eksekusi order beli
-    def buy(self, amount=0.001):
-        logging.info(f"🟢 SINYAL BELI TERDETEKSI! Membeli {amount} {self.symbol}")
-        order = self.exchange.create_market_buy_order(self.symbol, amount)
-        logging.info(f"✅ Order beli berhasil: {order}")
+    features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
+    X = df[features]
+    y = df["Target"]
 
-    # ✅ Eksekusi order jual
-    def sell(self, amount=0.001):
-        logging.info(f"🔴 SINYAL JUAL TERDETEKSI! Menjual {amount} {self.symbol}")
-        order = self.exchange.create_market_sell_order(self.symbol, amount)
-        logging.info(f"✅ Order jual berhasil: {order}")
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
 
-    # ✅ Strategi trading
-    def trade_strategy(self):
-        df = self.get_ohlcv()
-        df = self.calculate_indicators(df)
-        latest = df.iloc[-1]
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-        logging.info(f"⏳ Menjalankan strategi trading...")
-        logging.info(f"Harga: {latest['close']}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
+    model = xgb.XGBClassifier()
+    model.fit(X_train, y_train)
 
-        features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
-        latest_features = np.array([latest[features]])
-        latest_scaled = self.scaler.transform(latest_features)
+    accuracy = model.score(X_test, y_test)
+    logging.info(f"✅ Model Training Selesai! Akurasi: {accuracy * 100:.2f}%")
 
-        prediction = self.model.predict(latest_scaled)[0]
-        
-        if prediction == 1:
-            self.buy()
-        else:
-            logging.info("❌ Model ML memprediksi: Tidak ada aksi")
+    return model, scaler
+
+# Fungsi strategi trading
+def trade_strategy(model, scaler, symbol="BTC/USDT"):
+    df = get_ohlcv(symbol)
+    df = calculate_indicators(df)
+
+    latest = df.iloc[-1]
+    latest_features = np.array([latest[["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]]])
+    latest_scaled = scaler.transform(latest_features)
+
+    prediction = model.predict(latest_scaled)[0]
+
+    logging.info(f"⏳ Menjalankan strategi trading...")
+    logging.info(f"Harga: {latest['close']:.2f}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
+
+    if prediction == 1:
+        logging.info("✅ Model ML memprediksi: SINYAL BELI")
+    else:
+        logging.info("❌ Model ML memprediksi: Tidak ada aksi")
+
+# Fungsi utama
+def main():
+    symbol = "BTC/USDT"
+    filename = f"{symbol.replace('/', '_')}_data.csv"
+
+    df = get_ohlcv(symbol)
+    df.to_csv(filename, index=False)
+    logging.info(f"✅ Data {symbol} disimpan ke {filename}")
+
+    model, scaler = train_model(df)
+
+    while True:
+        trade_strategy(model, scaler, symbol)
+        time.sleep(3600)
+
+if __name__ == "__main__":
+    main()
