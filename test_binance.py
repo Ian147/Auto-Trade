@@ -96,17 +96,22 @@ def main():
 
     # Ambil data awal
     data = get_ohlcv(symbol)
+    
+    # 🔹 **Tambahkan perhitungan indikator sebelum menyimpan data**
+    data = calculate_indicators(data)
+
+    # Simpan data ke CSV
     data.to_csv(filename, index=False)
     print(f"✅ Data {symbol} disimpan ke {filename}")
 
-    # Latih model
+    # 🔹 **Pastikan data yang digunakan untuk training memiliki indikator**
     model, scaler = train_model(data)
 
     while True:
         print("\n⏳ Menjalankan strategi trading...")
         trade_strategy(symbol, model, scaler)
         time.sleep(3600)  # Loop setiap 1 jam
-
+        
 # ==================== Jalankan Script ====================
 if __name__ == "__main__":
     main()
