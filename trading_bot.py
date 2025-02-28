@@ -1,108 +1,73 @@
-import ccxt
-import pandas as pd
-import numpy as np
-import talib
 import time
 import logging
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+import pandas as pd
+from utils import get_ohlcv, calculate_indicators, save_data
+from config import SYMBOL
 
-# Konfigurasi Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Masukkan API Key Binance
-api_key = "6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj"
-api_secret = "HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0"
+class TradingBot:
+    def __init__(self, symbol=SYMBOL):
+        self.symbol = symbol
+        self.model = None
+        self.scaler = None
+    
+    # Latih model Machine Learning
+    def train_model(self):
+        df = get_ohlcv()
+        df = calculate_indicators(df)
+        df.dropna(inplace=True)
 
-# Inisialisasi Binance
-binance = ccxt.binance({
-    "apiKey": api_key,
-    "secret": api_secret,
-    "options": {"defaultType": "spot"}
-})
+        # Label target: 1 (Beli) jika harga naik di candle berikutnya, 0 jika tidak
+        df["Target"] = np.where(df["close"].shift(-1) > df["close"], 1, 0)
+        
+        features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
+        X = df[features]
+        y = df["Target"]
 
-# Fungsi untuk mengambil data candlestick
-def get_ohlcv(symbol="BTC/USDT", timeframe="1h", limit=100):
-    logging.info(f"📊 Mengambil data {symbol} dari Binance...")
-    bars = binance.fetch_ohlcv(symbol, timeframe, limit=limit)
-    df = pd.DataFrame(bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    return df
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Fungsi untuk menghitung indikator teknikal
-def calculate_indicators(df):
-    df["RSI"] = talib.RSI(df["close"], timeperiod=14)
+        self.scaler = StandardScaler()
+        X_train = self.scaler.fit_transform(X_train)
+        X_test = self.scaler.transform(X_test)
 
-    macd, macdsignal, macdhist = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
-    df["MACD"] = macd
-    df["MACD_Signal"] = macdsignal
+        self.model = xgb.XGBClassifier()
+        self.model.fit(X_train, y_train)
 
-    upper, middle, lower = talib.BBANDS(df["close"], timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
-    df["Upper_BB"] = upper
-    df["Middle_BB"] = middle
-    df["Lower_BB"] = lower
+        accuracy = self.model.score(X_test, y_test)
+        logging.info(f"✅ Model Training Selesai! Akurasi: {accuracy * 100:.2f}%")
 
-    return df.dropna()
+    # Analisis sinyal trading menggunakan Machine Learning
+    def analyze_market(self):
+        df = get_ohlcv()
+        df = calculate_indicators(df)
+        df.dropna(inplace=True)
 
-# Fungsi untuk melatih model ML
-def train_model(df):
-    logging.info("📈 Melatih model Machine Learning...")
+        latest = df.iloc[-1]
+        X_latest = self.scaler.transform([latest[["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]]])
 
-    df = calculate_indicators(df)
+        prediction = self.model.predict(X_latest)[0]
+        logging.info(f"📊 Harga: {latest['close']}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
 
-    df["Target"] = np.where(df["close"].shift(-1) > df["close"], 1, 0)
+        if prediction == 1:
+            logging.info("✅ Model ML memprediksi: BELI!")
+            return "BUY"
+        else:
+            logging.info("❌ Model ML memprediksi: Tidak ada aksi")
+            return "HOLD"
 
-    features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
-    X = df[features]
-    y = df["Target"]
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
-
-    model = xgb.XGBClassifier()
-    model.fit(X_train, y_train)
-
-    accuracy = model.score(X_test, y_test)
-    logging.info(f"✅ Model Training Selesai! Akurasi: {accuracy * 100:.2f}%")
-
-    return model, scaler
-
-# Fungsi strategi trading
-def trade_strategy(model, scaler, symbol="BTC/USDT"):
-    df = get_ohlcv(symbol)
-    df = calculate_indicators(df)
-
-    latest = df.iloc[-1]
-    latest_features = np.array([latest[["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]]])
-    latest_scaled = scaler.transform(latest_features)
-
-    prediction = model.predict(latest_scaled)[0]
-
-    logging.info(f"⏳ Menjalankan strategi trading...")
-    logging.info(f"Harga: {latest['close']:.2f}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
-
-    if prediction == 1:
-        logging.info("✅ Model ML memprediksi: SINYAL BELI")
-    else:
-        logging.info("❌ Model ML memprediksi: Tidak ada aksi")
-
-# Fungsi utama
-def main():
-    symbol = "BTC/USDT"
-    filename = f"{symbol.replace('/', '_')}_data.csv"
-
-    df = get_ohlcv(symbol)
-    df.to_csv(filename, index=False)
-    logging.info(f"✅ Data {symbol} disimpan ke {filename}")
-
-    model, scaler = train_model(df)
-
-    while True:
-        trade_strategy(model, scaler, symbol)
-        time.sleep(3600)
-
-if __name__ == "__main__":
-    main()
+    # Jalankan strategi trading
+    def run(self):
+        logging.info("🚀 Memulai bot trading...")
+        self.train_model()
+        
+        while True:
+            action = self.analyze_market()
+            if action == "BUY":
+                logging.info("🛒 Eksekusi Order BELI (dummy)...")
+                # Tambahkan fungsi order ke Binance jika ingin benar-benar trading
+            time.sleep(3600)  # Jalan setiap 1 jam
