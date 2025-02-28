@@ -1,6 +1,6 @@
 import time
 import logging
-from trading_bot import TradingBot
+from trading_bot import main
 
 # ✅ Setup Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
