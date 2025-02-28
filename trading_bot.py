@@ -43,7 +43,7 @@ class TradingBot:
 
     # Analisis sinyal trading menggunakan Machine Learning
     def analyze_market(self):
-    latest = self.data.iloc[-1]
+    latest = self.data.iloc[-1]  # Ambil data terbaru
     print(f"📊 Harga: {latest['close']}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
 
     # Pastikan nama kolom sesuai dengan saat training
@@ -52,7 +52,7 @@ class TradingBot:
     X_latest = self.scaler.transform(X_latest)
 
     prediction = self.model.predict(X_latest)[0]
-    
+
     if prediction == 1:
         print("✅ Model ML memprediksi: BELI")
         self.buy()
