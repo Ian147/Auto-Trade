@@ -58,7 +58,6 @@ class TradingBot:
         self.buy()
     else:
         print("❌ Model ML memprediksi: Tidak ada aksi")
-
     # Jalankan strategi trading
     def run(self):
         logging.info("🚀 Memulai bot trading...")
