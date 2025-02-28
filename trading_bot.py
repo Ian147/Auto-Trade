@@ -43,22 +43,21 @@ class TradingBot:
 
     # Analisis sinyal trading menggunakan Machine Learning
     def analyze_market(self):
-        df = get_ohlcv()
-        df = calculate_indicators(df)
-        df.dropna(inplace=True)
+    latest = self.data.iloc[-1]
+    print(f"📊 Harga: {latest['close']}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
 
-        latest = df.iloc[-1]
-        X_latest = self.scaler.transform([latest[["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]]])
+    # Pastikan nama kolom sesuai dengan saat training
+    X_latest = pd.DataFrame([latest[["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]]])
+    X_latest.columns = self.scaler.feature_names_in_  
+    X_latest = self.scaler.transform(X_latest)
 
-        prediction = self.model.predict(X_latest)[0]
-        logging.info(f"📊 Harga: {latest['close']}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
-
-        if prediction == 1:
-            logging.info("✅ Model ML memprediksi: BELI!")
-            return "BUY"
-        else:
-            logging.info("❌ Model ML memprediksi: Tidak ada aksi")
-            return "HOLD"
+    prediction = self.model.predict(X_latest)[0]
+    
+    if prediction == 1:
+        print("✅ Model ML memprediksi: BELI")
+        self.buy()
+    else:
+        print("❌ Model ML memprediksi: Tidak ada aksi")
 
     # Jalankan strategi trading
     def run(self):
