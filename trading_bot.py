@@ -23,6 +23,7 @@ class TradingBot:
         })
         self.model = None
         self.scaler = None
+        self.features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
 
     def fetch_data(self, limit=100):
         """Mengambil data pasar dari Binance."""
@@ -51,8 +52,7 @@ class TradingBot:
         """Melatih model Machine Learning (XGBoost)."""
         logging.info("📈 Melatih model Machine Learning...")
 
-        features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
-        X = data[features]
+        X = data[self.features]
         y = data["Target"]
 
         # Normalisasi data
@@ -63,7 +63,7 @@ class TradingBot:
         X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
         # Inisialisasi dan latih model XGBoost
-        self.model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+        self.model = xgb.XGBClassifier(eval_metric="logloss")  # Menghapus use_label_encoder
         self.model.fit(X_train, y_train)
 
         # Evaluasi akurasi model
@@ -78,9 +78,8 @@ class TradingBot:
         logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
 
         # Gunakan model ML untuk prediksi
-        features = ["open", "high", "low", "close", "volume", "RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
-        X_latest = latest[features].values.reshape(1, -1)
-        X_latest_scaled = self.scaler.transform(X_latest)
+        X_latest = latest[self.features].values.reshape(1, -1)
+        X_latest_scaled = pd.DataFrame(self.scaler.transform(X_latest), columns=self.features)  # Perbaikan warning
         prediction = self.model.predict(X_latest_scaled)[0]
 
         if prediction == 1:
