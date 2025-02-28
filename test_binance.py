@@ -4,8 +4,8 @@ import numpy as np
 import talib
 
 # Masukkan API Key Binance
-api_key = "YOUR_API_KEY"
-api_secret = "YOUR_SECRET_KEY"
+api_key = "6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj"
+api_secret = "HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0"
 
 # Inisialisasi Binance
 binance = ccxt.binance({
