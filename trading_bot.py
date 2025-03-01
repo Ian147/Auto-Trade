@@ -1,116 +1,122 @@
+import ccxt
 import pandas as pd
 import numpy as np
-import xgboost as xgb
-from binance.client import Client
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+import talib
 import time
+import xgboost as xgb
+from textblob import TextBlob
+import tweepy
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
 
-# Gantilah dengan API Key dan Secret Anda
-api_key = '6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj'
-api_secret = 'HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0'
-client = Client(api_key, api_secret)
+# Konfigurasi Binance API
+binance = ccxt.binance({
+    'apiKey': 'YOUR_API_KEY',
+    'secret': 'YOUR_SECRET_KEY',
+    'options': {'defaultType': 'future'}
+})
 
-# Fungsi untuk mengambil data historis BTC/USDT dari Binance
-def get_historical_data(symbol='BTCUSDT', interval='1h', lookback='1000'):
-    klines = client.get_historical_klines(symbol, interval, lookback + " hours ago UTC")
-    data = []
-    for kline in klines:
-        data.append([
-            pd.to_datetime(kline[0], unit='ms'),
-            float(kline[1]),  # Open
-            float(kline[2]),  # High
-            float(kline[3]),  # Low
-            float(kline[4]),  # Close
-            float(kline[5]),  # Volume
-        ])
-    df = pd.DataFrame(data, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+symbol = 'BTC/USDT'
+timeframe = '1h'
+
+# === 1. Ambil Data Historis ===
+def fetch_data():
+    data = binance.fetch_ohlcv(symbol, timeframe=timeframe, limit=500)
+    df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('timestamp', inplace=True)
     return df
 
-# Fungsi untuk memuat dan membersihkan data
-def clean_data(df):
-    df.dropna(inplace=True)  # Menghapus nilai kosong
-    return df
-
-# Fungsi untuk menambah indikator teknikal (Contoh: Simple Moving Average - SMA)
+# === 2. Tambahkan Indikator Teknikal ===
 def add_indicators(df):
-    df['SMA_20'] = df['Close'].rolling(window=20).mean()
-    df['SMA_50'] = df['Close'].rolling(window=50).mean()
-    df['RSI'] = compute_rsi(df['Close'], 14)  # RSI dengan periode 14
-    df = df.dropna()  # Menghapus baris yang kosong karena indikator
-    return df
+    df['rsi'] = talib.RSI(df['close'], timeperiod=14)
+    df['macd'], df['macd_signal'], _ = talib.MACD(df['close'])
+    df['boll_upper'], df['boll_middle'], df['boll_lower'] = talib.BBANDS(df['close'])
+    return df.dropna()
 
-# Fungsi untuk menghitung RSI (Relative Strength Index)
-def compute_rsi(data, window):
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+# === 3. Analisis Sentimen Twitter ===
+def get_sentiment():
+    auth = tweepy.OAuthHandler('YOUR_CONSUMER_KEY', 'YOUR_CONSUMER_SECRET')
+    auth.set_access_token('YOUR_ACCESS_TOKEN', 'YOUR_ACCESS_SECRET')
+    api = tweepy.API(auth)
+    tweets = api.search_tweets("Bitcoin", count=50)
+    sentiments = [TextBlob(tweet.text).sentiment.polarity for tweet in tweets]
+    return sum(sentiments) / len(sentiments) if sentiments else 0
 
-# Fungsi untuk memuat fitur dan label untuk pelatihan
-def prepare_data(df):
-    X = df[['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_20', 'SMA_50', 'RSI']]
-    # Menggunakan perbedaan harga tutup untuk label (1 = naik, 0 = turun)
-    y = (df['Close'].shift(-1) > df['Close']).astype(int)  # 1 jika harga naik, 0 jika turun
-    return X, y
-
-# Fungsi untuk membagi data menjadi training dan testing
-def split_data(X, y):
-    return train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Fungsi untuk melatih model XGBoost
-def train_model(X, y):
-    X_train, X_test, y_train, y_test = split_data(X, y)
-
-    # Model XGBoost
-    model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss')
-    print("Melatih model...")
-    model.fit(X_train, y_train)
-
-    # Evaluasi model
-    y_pred = model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-    print(f"Akurasi: {accuracy * 100:.2f}%")
+# === 4. Model XGBoost untuk Prediksi ===
+def train_xgb_model(df):
+    X = df[['rsi', 'macd', 'boll_upper', 'boll_middle', 'boll_lower']]
+    y = np.where(df['close'].shift(-1) > df['close'], 1, 0)
+    
+    model = xgb.XGBClassifier(max_depth=6, learning_rate=0.1, n_estimators=200)
+    model.fit(X[:-1], y[:-1])
     return model
 
-# Fungsi untuk memprediksi sinyal perdagangan
-def predict_signal(model, X):
-    predictions = model.predict(X)
-    return predictions
+# === 5. Model LSTM untuk Prediksi ===
+def train_lstm_model(df):
+    X = df[['rsi', 'macd', 'boll_upper', 'boll_middle', 'boll_lower']].values
+    y = np.where(df['close'].shift(-1) > df['close'], 1, 0)
+    
+    X = X.reshape((X.shape[0], 1, X.shape[1]))
+    
+    model = Sequential([
+        LSTM(50, return_sequences=True, input_shape=(1, X.shape[2])),
+        LSTM(50),
+        Dense(1, activation='sigmoid')
+    ])
+    
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+    model.fit(X[:-1], y[:-1], epochs=50, batch_size=32, verbose=0)
+    
+    return model
 
-# Fungsi utama untuk bot
-def main():
-    # Ambil data historis BTC/USDT
-    df = get_historical_data(symbol='BTCUSDT', interval='1h', lookback='1000')
-
-    # Bersihkan dan tambah indikator teknikal
-    df = clean_data(df)
-    df = add_indicators(df)
-
-    # Persiapkan data untuk pelatihan
-    X, y = prepare_data(df)
-
-    # Melatih model
-    model = train_model(X, y)
-    if model:
-        print("Model telah berhasil dilatih.")
+# === 6. Eksekusi Trading ===
+def execute_trade(prediction, sentiment, stop_loss_pct=0.02, take_profit_pct=0.04):
+    balance = binance.fetch_balance()
+    usdt_balance = balance['total']['USDT']
+    
+    if usdt_balance > 10:
+        price = binance.fetch_ticker(symbol)['last']
+        amount = (usdt_balance * 0.1) / price
         
-        # Prediksi sinyal perdagangan untuk data terbaru
-        new_data = df.iloc[-1:][['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_20', 'SMA_50', 'RSI']]
+        if prediction == 1 and sentiment > 0:
+            print("BUY Signal Executed!")
+            binance.create_market_buy_order(symbol, amount)
+        elif prediction == 0 and sentiment < 0:
+            print("SELL Signal Executed!")
+            binance.create_market_sell_order(symbol, amount)
         
-        signal = predict_signal(model, new_data)
-        if signal == 1:
-            print("Sinyal: Beli")
-        elif signal == 0:
-            print("Sinyal: Jual")
-        else:
-            print("Sinyal: Tahan")
-    else:
-        print("Model gagal dilatih.")
+        # Stop Loss & Take Profit
+        stop_loss = price * (1 - stop_loss_pct)
+        take_profit = price * (1 + take_profit_pct)
+        print(f"Stop Loss: {stop_loss}, Take Profit: {take_profit}")
 
+# === 7. Main Loop ===
 if __name__ == "__main__":
+    df = fetch_data()
+    df = add_indicators(df)
+    
+    # Train Models
+    xgb_model = train_xgb_model(df)
+    lstm_model = train_lstm_model(df)
+    
     while True:
-        main()
-        time.sleep(60 * 60)  # Tunggu 1 jam sebelum mengambil data dan memprediksi lagi
+        df = fetch_data()
+        df = add_indicators(df)
+        
+        X_new = df[['rsi', 'macd', 'boll_upper', 'boll_middle', 'boll_lower']].iloc[-1:].values
+        X_new_lstm = X_new.reshape((X_new.shape[0], 1, X_new.shape[1]))
+        
+        xgb_pred = xgb_model.predict(X_new)[0]
+        lstm_pred = lstm_model.predict(X_new_lstm)[0][0]
+        
+        sentiment = get_sentiment()
+        
+        final_prediction = 1 if (xgb_pred + lstm_pred) / 2 > 0.5 else 0
+        
+        execute_trade(final_prediction, sentiment)
+        
+        print(f"Prediction: {final_prediction}, Sentiment: {sentiment}")
+        
+        time.sleep(3600)  # Cek setiap 1 jam
