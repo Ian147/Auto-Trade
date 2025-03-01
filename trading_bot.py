@@ -20,28 +20,33 @@ class TradingBot:
         self.sl_multiplier = 0.98   # Stop Loss 2%
     
     def fetch_data(self, limit=5000):
+       def fetch_data(self, limit=5000):
+    try:
         klines = self.client.get_klines(symbol=self.symbol, interval=self.timeframe, limit=limit)
+        if not klines:  # Jika data kosong
+            logging.error("⚠️ Binance API tidak mengembalikan data!")
+            return pd.DataFrame()  # Return dataframe kosong
+        
         df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', '_', '_', '_', '_', '_', '_'])
         df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].astype(float)
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
-        # Tambahkan indikator teknikal yang lebih banyak
+        # Tambahkan indikator teknikal
         df["rsi"] = talib.RSI(df["close"], timeperiod=14)
         df["macd"], df["macd_signal"], _ = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
         df["ema50"] = talib.EMA(df["close"], timeperiod=50)
         df["ema200"] = talib.EMA(df["close"], timeperiod=200)
-        df["stochastic"] = talib.STOCH(df["high"], df["low"], df["close"])[0]
-        df["adx"] = talib.ADX(df["high"], df["low"], df["close"], timeperiod=14)
         df["atr"] = talib.ATR(df["high"], df["low"], df["close"], timeperiod=14)
-        upper, middle, lower = talib.BBANDS(df["close"], timeperiod=20)
-        df["bb_upper"] = upper
-        df["bb_middle"] = middle
-        df["bb_lower"] = lower
-        df["volatility"] = (df["high"] - df["low"]) / df["close"]
-        df["volume_change"] = df["volume"].pct_change()
 
         df.dropna(inplace=True)
+
+        # Tambahkan log jumlah data
+        logging.info(f"📊 Data berhasil diambil: {len(df)} baris")
+
         return df
+    except Exception as e:
+        logging.error(f"❌ Error saat fetch data: {e}")
+        return pd.DataFrame()  # Return dataframe kosong jika error
 
     def train_model(self):
         self.data = self.fetch_data()
@@ -73,15 +78,20 @@ class TradingBot:
             logging.info(f"✅ ORDER SELL @ {price:.2f}")
 
     def run(self):
-        self.train_model()
-        while True:
-            df = self.fetch_data(limit=50)
-            latest = df.iloc[-1]
-            action = self.predict(latest)
+    self.train_model()
+    while True:
+        df = self.fetch_data(limit=50)
+        
+        if df.empty:  # Cek apakah data kosong
+            logging.warning("⚠️ Data kosong, skip iterasi...")
+            continue
 
-            logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['rsi']:.2f}, MACD: {latest['macd']:.2f}, ATR: {latest['atr']:.2f}, ADX: {latest['adx']:.2f}")
+        latest = df.iloc[-1]  # Ambil data terakhir
+        action = self.predict(latest)
 
-            if action == 1:
-                self.execute_trade(latest["close"], "BUY", latest["atr"])
-            else:
-                logging.info("❌ Model ML memprediksi: Tidak ada aksi")
+        logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['rsi']:.2f}, MACD: {latest['macd']:.2f}, ATR: {latest['atr']:.2f}")
+
+        if action == 1:
+            self.execute_trade(latest["close"], "BUY", latest["atr"])
+        else:
+            logging.info("❌ Model ML memprediksi: Tidak ada aksi")
