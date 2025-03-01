@@ -101,3 +101,33 @@ class TradingBot:
                 self.execute_trade(signal)
 
             time.sleep(60)
+            import requests
+
+# Konfigurasi Telegram
+TOKEN = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"  # Ganti dengan Token Bot
+CHAT_ID = "681125756"  # Ganti dengan Chat ID
+
+def send_telegram_message(message):
+    """Mengirim pesan ke Telegram."""
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message}
+    requests.post(url, data=payload)
+
+# Contoh: Kirim pesan saat Open Posisi
+def open_trade(symbol, price, stop_loss, take_profit):
+    message = (
+        f"📢 *Open Trade*: {symbol}\n"
+        f"💰 *Entry Price*: {price}\n"
+        f"🛑 *Stop Loss*: {stop_loss}\n"
+        f"✅ *Take Profit*: {take_profit}"
+    )
+    send_telegram_message(message)
+
+# Contoh: Kirim pesan saat trade ditutup (TP/SL tercapai)
+def close_trade(symbol, result):
+    message = f"🔔 *Trade Closed*: {symbol}\n🚀 *Result*: {result}"
+    send_telegram_message(message)
+
+# Contoh penggunaan:
+open_trade("BTC/USDT", 84000, 83000, 85000)  # Open posisi
+close_trade("BTC/USDT", "Take Profit Hit!")  # TP tercapai
