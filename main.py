@@ -6,7 +6,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 def main():
     logging.info("🚀 Memulai bot trading...")
-    symbol = "BTC/USDT"
+    symbol = "BTCUSDT"  # <-- Hapus tanda '/'
     timeframe = "5m"
 
     bot = TradingBot(symbol, timeframe)
