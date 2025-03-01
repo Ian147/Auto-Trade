@@ -1,3 +1,4 @@
+import requests
 import logging
 import pandas as pd
 import numpy as np
@@ -101,7 +102,7 @@ class TradingBot:
                 self.execute_trade(signal)
 
             time.sleep(60)
-            import requests
+            
 
 # Konfigurasi Telegram
 TOKEN = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"  # Ganti dengan Token Bot
