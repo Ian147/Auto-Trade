@@ -1,15 +1,13 @@
 import logging
 from trading_bot import TradingBot
 
-# Konfigurasi logging
+# Konfigurasi Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def main():
     logging.info("🚀 Memulai bot trading...")
-    
-    # Atur pasangan koin dan timeframe
     symbol = "BTC/USDT"
-    timeframe = "1m"
+    timeframe = "5m"
 
     bot = TradingBot(symbol, timeframe)
     bot.run()
