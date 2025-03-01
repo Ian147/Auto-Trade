@@ -16,8 +16,7 @@ binance = ccxt.binance({
 })
 
 # ✅ KONFIGURASI TELEGRAM
-TELEGRAM_BOT_TOKEN = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw
-"
+TELEGRAM_BOT_TOKEN = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
 TELEGRAM_CHAT_ID = "681125756"
 
 def send_telegram_message(message):
