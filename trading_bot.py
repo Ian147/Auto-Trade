@@ -1,94 +1,116 @@
-# trading_bot.py
-import time
 import pandas as pd
 import numpy as np
+import xgboost as xgb
 from binance.client import Client
-from ta.momentum import RSIIndicator
-from xgboost import XGBClassifier
-from config import BINANCE_API_KEY, BINANCE_SECRET_KEY, TRADE_SYMBOL, TIMEFRAME, TRADE_AMOUNT
-from telegram_notif import send_telegram_message
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+import time
 
-# Inisialisasi Binance Client
-client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
+# Gantilah dengan API Key dan Secret Anda
+api_key = 'your_api_key'
+api_secret = 'your_api_secret'
+client = Client(api_key, api_secret)
 
-# Inisialisasi Model AI
-model = XGBClassifier()
-
-def get_historical_data(symbol, interval, limit=100):
-    """Mengambil data harga historis dari Binance."""
-    klines = client.get_klines(symbol=symbol, interval=interval, limit=limit)
-    df = pd.DataFrame(klines, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
-    df['close'] = df['close'].astype(float)
+# Fungsi untuk mengambil data historis BTC/USDT dari Binance
+def get_historical_data(symbol='BTCUSDT', interval='1h', lookback='1000'):
+    klines = client.get_historical_klines(symbol, interval, lookback + " hours ago UTC")
+    data = []
+    for kline in klines:
+        data.append([
+            pd.to_datetime(kline[0], unit='ms'),
+            float(kline[1]),  # Open
+            float(kline[2]),  # High
+            float(kline[3]),  # Low
+            float(kline[4]),  # Close
+            float(kline[5]),  # Volume
+        ])
+    df = pd.DataFrame(data, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
     return df
 
-def train_model():
-    """Melatih model AI dengan data historis."""
-    df = get_historical_data(TRADE_SYMBOL, TIMEFRAME, 200)
-    df['RSI'] = RSIIndicator(df['close']).rsi()
-    df['label'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)  # 1 = Buy, 0 = Sell
-    X = df[['RSI']].dropna()
-    y = df['label'].dropna()
-    model.fit(X, y)
+# Fungsi untuk memuat dan membersihkan data
+def clean_data(df):
+    df.dropna(inplace=True)  # Menghapus nilai kosong
+    return df
 
-def make_decision():
-    """Menganalisis data dan menentukan apakah harus Buy atau Sell."""
-    df = get_historical_data(TRADE_SYMBOL, TIMEFRAME, 50)
-    df['RSI'] = RSIIndicator(df['close']).rsi()
-    latest_rsi = df['RSI'].iloc[-1]
-    
-    # Gunakan AI untuk memprediksi sinyal
-    signal = model.predict(np.array([[latest_rsi]]))[0]
-    
-    if signal == 1:
-        return "BUY"
-    else:
-        return "SELL"
+# Fungsi untuk menambah indikator teknikal (Contoh: Simple Moving Average - SMA)
+def add_indicators(df):
+    df['SMA_20'] = df['Close'].rolling(window=20).mean()
+    df['SMA_50'] = df['Close'].rolling(window=50).mean()
+    df['RSI'] = compute_rsi(df['Close'], 14)  # RSI dengan periode 14
+    df = df.dropna()  # Menghapus baris yang kosong karena indikator
+    return df
 
-def execute_trade(order_type):
-    """Eksekusi order Buy atau Sell."""
-    price = float(client.get_symbol_ticker(symbol=TRADE_SYMBOL)['price'])
-    tp1 = price * 1.005 if order_type == "BUY" else price * 0.995
-    tp2 = price * 1.010 if order_type == "BUY" else price * 0.990
-    sl = price * 0.995 if order_type == "BUY" else price * 1.005
+# Fungsi untuk menghitung RSI (Relative Strength Index)
+def compute_rsi(data, window):
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-    send_telegram_message(f"🔵 Open {order_type} at {price:.2f}, TP1: {tp1:.2f}, TP2: {tp2:.2f}, SL: {sl:.2f}")
+# Fungsi untuk memuat fitur dan label untuk pelatihan
+def prepare_data(df):
+    X = df[['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_20', 'SMA_50', 'RSI']]
+    # Menggunakan perbedaan harga tutup untuk label (1 = naik, 0 = turun)
+    y = (df['Close'].shift(-1) > df['Close']).astype(int)  # 1 jika harga naik, 0 jika turun
+    return X, y
 
-    return price, tp1, tp2, sl
+# Fungsi untuk membagi data menjadi training dan testing
+def split_data(X, y):
+    return train_test_split(X, y, test_size=0.2, random_state=42)
 
-def monitor_trade(entry_price, tp1, tp2, sl, order_type):
-    """Monitor posisi sampai TP atau SL tercapai."""
-    while True:
-        price = float(client.get_symbol_ticker(symbol=TRADE_SYMBOL)['price'])
+# Fungsi untuk melatih model XGBoost
+def train_model(X, y):
+    X_train, X_test, y_train, y_test = split_data(X, y)
 
-        if order_type == "BUY":
-            if price >= tp1:
-                send_telegram_message(f"✅ TP1 tercapai di {tp1:.2f}!")
-                return
-            elif price >= tp2:
-                send_telegram_message(f"✅✅ TP2 tercapai di {tp2:.2f}!")
-                return
-            elif price <= sl:
-                send_telegram_message(f"⚠️ Stop Loss tercapai di {sl:.2f}!")
-                return
-        else:  # SELL
-            if price <= tp1:
-                send_telegram_message(f"✅ TP1 tercapai di {tp1:.2f}!")
-                return
-            elif price <= tp2:
-                send_telegram_message(f"✅✅ TP2 tercapai di {tp2:.2f}!")
-                return
-            elif price >= sl:
-                send_telegram_message(f"⚠️ Stop Loss tercapai di {sl:.2f}!")
-                return
+    # Model XGBoost
+    model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss')
+    print("Melatih model...")
+    model.fit(X_train, y_train)
+
+    # Evaluasi model
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    print(f"Akurasi: {accuracy * 100:.2f}%")
+    return model
+
+# Fungsi untuk memprediksi sinyal perdagangan
+def predict_signal(model, X):
+    predictions = model.predict(X)
+    return predictions
+
+# Fungsi utama untuk bot
+def main():
+    # Ambil data historis BTC/USDT
+    df = get_historical_data(symbol='BTCUSDT', interval='1h', lookback='1000')
+
+    # Bersihkan dan tambah indikator teknikal
+    df = clean_data(df)
+    df = add_indicators(df)
+
+    # Persiapkan data untuk pelatihan
+    X, y = prepare_data(df)
+
+    # Melatih model
+    model = train_model(X, y)
+    if model:
+        print("Model telah berhasil dilatih.")
         
-        time.sleep(10)  # Cek harga setiap 10 detik
+        # Prediksi sinyal perdagangan untuk data terbaru
+        new_data = df.iloc[-1:][['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_20', 'SMA_50', 'RSI']]
+        
+        signal = predict_signal(model, new_data)
+        if signal == 1:
+            print("Sinyal: Beli")
+        elif signal == 0:
+            print("Sinyal: Jual")
+        else:
+            print("Sinyal: Tahan")
+    else:
+        print("Model gagal dilatih.")
 
 if __name__ == "__main__":
-    send_telegram_message("🚀 Bot Trading Binance Dimulai!")
-    train_model()
-
     while True:
-        signal = make_decision()
-        entry_price, tp1, tp2, sl = execute_trade(signal)
-        monitor_trade(entry_price, tp1, tp2, sl, signal)
-        time.sleep(60)  # Cek sinyal setiap 1 menit
+        main()
+        time.sleep(60 * 60)  # Tunggu 1 jam sebelum mengambil data dan memprediksi lagi
