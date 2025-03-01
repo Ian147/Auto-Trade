@@ -1,0 +1,12 @@
+[Unit]
+Description=Auto Trading Bot
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/src/Auto-Trade/main.py
+WorkingDirectory=/usr/local/src/Auto-Trade
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
