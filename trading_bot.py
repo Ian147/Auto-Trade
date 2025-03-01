@@ -61,33 +61,22 @@ class TradingBot:
         logging.info(f"✅ Model Training Selesai! Akurasi: {accuracy * 100:.2f}%")
 
     def analyze_market(self):
-        self.data = self.fetch_data(limit=50)
-        latest = self.data.iloc[-1]
+    self.data = self.fetch_data(limit=50)
+    latest = self.data.iloc[-1]
 
-        logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
+    logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
 
-        X_latest = latest[self.features].values.reshape(1, -1)
-        X_latest_scaled = self.scaler.transform(X_latest)  # Perbaikan untuk menghilangkan warning
-        prediction = self.model.predict(X_latest_scaled)[0]
+    # Perbaikan: Pastikan fitur tetap memiliki nama
+    X_latest = pd.DataFrame([latest[self.features].values], columns=self.features)
+    X_latest_scaled = self.scaler.transform(X_latest)
+    prediction = self.model.predict(X_latest_scaled)[0]
 
-        if prediction == 1:
-            logging.info("✅ Model ML memprediksi: BUY SIGNAL")
-            self.place_order("buy")
-        else:
-            logging.info("❌ Model ML memprediksi: Tidak ada aksi")
-
-    def place_order(self, order_type):
-        amount = 0.001
-        try:
-            if order_type == "buy":
-                order = self.binance.create_market_buy_order(self.symbol, amount)
-            else:
-                order = self.binance.create_market_sell_order(self.symbol, amount)
-
-            logging.info(f"✅ Order {order_type.upper()} berhasil: {order}")
-        except Exception as e:
-            logging.error(f"❌ Gagal mengeksekusi order: {e}")
-
+    if prediction == 1:
+        logging.info("✅ Model ML memprediksi: BUY SIGNAL")
+        self.place_order("buy")
+    else:
+        logging.info("❌ Model ML memprediksi: Tidak ada aksi")
+    
     def run(self):
         logging.info("🚀 Memulai bot trading...")
 
