@@ -7,8 +7,8 @@ from sklearn.metrics import accuracy_score
 import time
 
 # Gantilah dengan API Key dan Secret Anda
-api_key = 'your_api_key'
-api_secret = 'your_api_secret'
+api_key = '6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj'
+api_secret = 'HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0'
 client = Client(api_key, api_secret)
 
 # Fungsi untuk mengambil data historis BTC/USDT dari Binance
