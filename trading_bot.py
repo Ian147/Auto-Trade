@@ -2,7 +2,8 @@ import os
 import ccxt
 import pandas as pd
 import numpy as np
-import requests
+import request
+import asyncio
 import time
 from dotenv import load_dotenv
 from ta.trend import EMAIndicator, MACD
@@ -29,8 +30,8 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 # Fungsi untuk mengirim pesan ke Telegram
 def send_telegram_message(message):
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-
+    asyncio.run(bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message))
+    
 # Fungsi untuk mendapatkan saldo USDT
 def get_balance():
     balance = exchange.fetch_balance()
