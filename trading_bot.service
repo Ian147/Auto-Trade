@@ -3,8 +3,10 @@ Description=Auto Trading Bot
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/src/Auto-Trade/main.py
+ExecStart=/usr/bin/python3 /usr/local/src/Auto-Trade/trading_bot.py
 WorkingDirectory=/usr/local/src/Auto-Trade
+StandardOutput=append:/var/log/trading_bot.log
+StandardError=append:/var/log/trading_bot.log
 Restart=always
 User=root
 
