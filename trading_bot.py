@@ -1,110 +1,115 @@
 import ccxt
-import numpy as np
-import pandas as pd
 import time
-import talib
+import pandas as pd
+import numpy as np
+import ta
 import requests
 
-# Konfigurasi API Binance
-API_KEY = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
-API_SECRET = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
+# ✅ KONFIGURASI API BINANCE
+api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
+api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
 
-# Konfigurasi API Telegram
-TELEGRAM_TOKEN = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
-TELEGRAM_CHAT_ID = "681125756"
-
-# Inisialisasi Binance
 binance = ccxt.binance({
-    "apiKey": API_KEY,
-    "secret": API_SECRET,
-    "options": {"defaultType": "spot"},
-    "enableRateLimit": True
+    "apiKey": api_key,
+    "secret": api_secret,
+    "options": {"defaultType": "spot"}
 })
 
-# Fungsi kirim notifikasi ke Telegram
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    requests.post(url, data=data)
+# ✅ KONFIGURASI TELEGRAM
+TELEGRAM_BOT_TOKEN = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw
+"
+TELEGRAM_CHAT_ID = "681125756"
 
-# Fungsi mengambil data pasar
-def get_market_data(symbol, timeframe='1h', limit=100):
-    candles = binance.fetch_ohlcv(symbol, timeframe, limit=limit)
-    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['close'] = df['close'].astype(float)
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print(f"Telegram Error: {e}")
+
+# ✅ PENGAMBILAN DATA MARKET
+def get_data(symbol, timeframe="1h", limit=100):
+    bars = binance.fetch_ohlcv(symbol, timeframe, limit=limit)
+    df = pd.DataFrame(bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["close"] = df["close"].astype(float)
     return df
 
-# Fungsi analisis teknikal & prediksi sinyal trading
-def get_trading_signal(symbol):
-    df = get_market_data(symbol)
+# ✅ ANALISIS TEKNIKAL (RSI, MACD, Bollinger Bands)
+def analyze_market(symbol):
+    df = get_data(symbol)
 
     # Indikator RSI
-    df['rsi'] = talib.RSI(df['close'], timeperiod=14)
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
 
     # Indikator MACD
-    df['macd'], df['signal'], _ = talib.MACD(df['close'], fastperiod=12, slowperiod=26, signalperiod=9)
+    macd = ta.trend.MACD(df["close"])
+    df["macd"] = macd.macd()
+    df["macd_signal"] = macd.macd_signal()
 
-    # Indikator Bollinger Bands
-    df['upper'], df['middle'], df['lower'] = talib.BBANDS(df['close'], timeperiod=20)
+    # Bollinger Bands
+    bb = ta.volatility.BollingerBands(df["close"])
+    df["bb_upper"] = bb.bollinger_hband()
+    df["bb_lower"] = bb.bollinger_lband()
 
-    # Strategi Trading:
-    if df['rsi'].iloc[-1] < 30 and df['macd'].iloc[-1] > df['signal'].iloc[-1] and df['close'].iloc[-1] < df['lower'].iloc[-1]:
+    # **Logika Trading**
+    latest = df.iloc[-1]
+
+    if latest["rsi"] < 30 and latest["macd"] > latest["macd_signal"]:
         return "BUY"
-    elif df['rsi'].iloc[-1] > 70 and df['macd'].iloc[-1] < df['signal'].iloc[-1] and df['close'].iloc[-1] > df['upper'].iloc[-1]:
+    elif latest["rsi"] > 70 and latest["macd"] < latest["macd_signal"]:
         return "SELL"
-    else:
-        return "HOLD"
+    return "HOLD"
 
-# Fungsi untuk mengeksekusi order
-def place_order(signal, symbol, balance_usdt):
-    price = binance.fetch_ticker(symbol)['last']
+# ✅ FUNGSI EKSEKUSI ORDER
+def place_order(symbol, signal, amount=10):  # Default 10 USDT
+    try:
+        if signal == "BUY":
+            order = binance.create_market_buy_order(symbol, amount / binance.fetch_ticker(symbol)["close"])
+        elif signal == "SELL":
+            order = binance.create_market_sell_order(symbol, amount / binance.fetch_ticker(symbol)["close"])
+        else:
+            return None
+        
+        print(f"Order Executed: {order}")
+        send_telegram_message(f"📢 {signal} Order Executed: {order}")
+        return order
+    except Exception as e:
+        print(f"Error placing order: {e}")
+        send_telegram_message(f"❌ Order Error: {e}")
+        return None
 
-    # Menentukan jumlah koin berdasarkan saldo USDT
-    amount = balance_usdt / price
+# ✅ FUNGSI TP1, TP2, SL
+def manage_trade(symbol, entry_price, tp1_ratio=1.02, tp2_ratio=1.05, sl_ratio=0.98):
+    tp1 = entry_price * tp1_ratio
+    tp2 = entry_price * tp2_ratio
+    sl = entry_price * sl_ratio
 
-    # Take Profit & Stop Loss
-    TP1 = price * 1.02   # Take Profit 1 (2% profit)
-    TP2 = price * 1.05   # Take Profit 2 (5% profit)
-    SL = price * 0.98    # Stop Loss (2% cut loss)
-
-    if signal == "BUY":
-        order = binance.create_market_buy_order(symbol, amount)
-        send_telegram_message(f"📈 Open Buy {symbol} at {price}\n🎯 TP1: {TP1}\n🎯 TP2: {TP2}\n⛔ SL: {SL}")
-        monitor_position(symbol, amount, TP1, TP2, SL)
-
-    elif signal == "SELL":
-        order = binance.create_market_sell_order(symbol, amount)
-        send_telegram_message(f"📉 Open Sell {symbol} at {price}\n🎯 TP1: {TP1}\n🎯 TP2: {TP2}\n⛔ SL: {SL}")
-
-# Fungsi untuk memantau posisi & eksekusi TP/SL
-def monitor_position(symbol, amount, TP1, TP2, SL):
     while True:
-        price = binance.fetch_ticker(symbol)['last']
-
-        if price >= TP1:
-            binance.create_market_sell_order(symbol, amount / 2)  # Jual 50% di TP1
-            send_telegram_message(f"✅ TP1 Tercapai! {symbol} at {TP1}")
-
-        if price >= TP2:
-            binance.create_market_sell_order(symbol, amount / 2)  # Jual sisa 50% di TP2
-            send_telegram_message(f"🚀 TP2 Tercapai! {symbol} at {TP2}")
-            break  # Keluar dari loop setelah TP2 tercapai
-
-        if price <= SL:
-            binance.create_market_sell_order(symbol, amount)  # Cut Loss
-            send_telegram_message(f"⚠️ Stop Loss Terpicu! {symbol} at {SL}")
-            break  # Keluar dari loop setelah SL tercapai
+        current_price = binance.fetch_ticker(symbol)["close"]
+        
+        if current_price >= tp1:
+            send_telegram_message(f"✅ TP1 HIT: {current_price}")
+            break
+        elif current_price >= tp2:
+            send_telegram_message(f"✅ TP2 HIT: {current_price}")
+            break
+        elif current_price <= sl:
+            send_telegram_message(f"🚨 STOP LOSS HIT: {current_price}")
+            break
 
         time.sleep(10)  # Cek harga setiap 10 detik
 
-# Loop utama trading bot
-symbol = "DOGE/USDT"  # Pasangan koin yang ditradingkan
-balance = binance.fetch_balance()['USDT']['free']  # Cek saldo USDT
+# ✅ LOOPING UTAMA BOT
+symbol = "BTC/USDT"
 
 while True:
-    signal = get_trading_signal(symbol)
-    
-    if signal != "HOLD":
-        place_order(signal, symbol, balance)
-    
-    time.sleep(60)  # Cek setiap 1 menit
+    signal = analyze_market(symbol)
+    if signal in ["BUY", "SELL"]:
+        order = place_order(symbol, signal)
+        if order:
+            entry_price = order["price"]
+            manage_trade(symbol, entry_price)
+
+    print(f"Waiting... ({signal})")
+    time.sleep(60)  # Cek market setiap 1 menit
