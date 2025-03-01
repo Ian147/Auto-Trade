@@ -1,114 +1,126 @@
+import os
 import ccxt
-import time
 import pandas as pd
 import numpy as np
-import ta
 import requests
+import time
+from dotenv import load_dotenv
+from ta.trend import EMAIndicator, MACD
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands
+from telegram import Bot
 
-# ✅ KONFIGURASI API BINANCE
-api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
-api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
+# Load API dari file .env
+load_dotenv()
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-binance = ccxt.binance({
-    "apiKey": api_key,
-    "secret": api_secret,
+# Inisialisasi Binance API
+exchange = ccxt.binance({
+    "apiKey": BINANCE_API_KEY,
+    "secret": BINANCE_API_SECRET,
     "options": {"defaultType": "spot"}
 })
 
-# ✅ KONFIGURASI TELEGRAM
-TELEGRAM_BOT_TOKEN = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
-TELEGRAM_CHAT_ID = "681125756"
+# Inisialisasi Bot Telegram
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
+# Fungsi untuk mengirim pesan ke Telegram
 def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print(f"Telegram Error: {e}")
+    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
 
-# ✅ PENGAMBILAN DATA MARKET
-def get_data(symbol, timeframe="1h", limit=100):
-    bars = binance.fetch_ohlcv(symbol, timeframe, limit=limit)
-    df = pd.DataFrame(bars, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    df["close"] = df["close"].astype(float)
+# Fungsi untuk mendapatkan saldo USDT
+def get_balance():
+    balance = exchange.fetch_balance()
+    return balance['total'].get('USDT', 0)
+
+# Fungsi untuk mendapatkan data harga
+def fetch_ohlcv(symbol="DOGE/USDT", timeframe="5m", limit=100):
+    data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df
 
-# ✅ ANALISIS TEKNIKAL (RSI, MACD, Bollinger Bands)
-def analyze_market(symbol):
-    df = get_data(symbol)
-
-    # Indikator RSI
-    df["rsi"] = ta.momentum.RSIIndicator(df["close"]).rsi()
-
-    # Indikator MACD
-    macd = ta.trend.MACD(df["close"])
+# Fungsi untuk analisis teknikal
+def analyze_market(df):
+    df["ema50"] = EMAIndicator(df["close"], window=50).ema_indicator()
+    df["ema200"] = EMAIndicator(df["close"], window=200).ema_indicator()
+    df["rsi"] = RSIIndicator(df["close"], window=14).rsi()
+    macd = MACD(df["close"])
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
+    bollinger = BollingerBands(df["close"])
+    df["bb_lower"] = bollinger.bollinger_lband()
+    df["bb_upper"] = bollinger.bollinger_hband()
+    return df
 
-    # Bollinger Bands
-    bb = ta.volatility.BollingerBands(df["close"])
-    df["bb_upper"] = bb.bollinger_hband()
-    df["bb_lower"] = bb.bollinger_lband()
+# Fungsi untuk mengecek sentimen berita dari Twitter/X
+def get_sentiment():
+    url = "https://cryptonews-api.com/api/v1?tickers=DOGE&token=your_news_api_key"
+    response = requests.get(url)
+    if response.status_code == 200:
+        news = response.json()["data"]
+        positive = sum(1 for article in news if "bullish" in article["title"].lower())
+        negative = sum(1 for article in news if "bearish" in article["title"].lower())
+        return "bullish" if positive > negative else "bearish"
+    return "neutral"
 
-    # **Logika Trading**
-    latest = df.iloc[-1]
+# Fungsi untuk membuka posisi beli
+def place_buy_order(amount=5):
+    price = exchange.fetch_ticker("DOGE/USDT")["last"]
+    qty = amount / price
+    order = exchange.create_market_buy_order("DOGE/USDT", qty)
+    send_telegram_message(f"✅ Open BUY Order: {qty:.2f} DOGE @ {price:.4f} USDT\n💰 Balance: {get_balance():.2f} USDT")
+    return price
 
-    if latest["rsi"] < 30 and latest["macd"] > latest["macd_signal"]:
-        return "BUY"
-    elif latest["rsi"] > 70 and latest["macd"] < latest["macd_signal"]:
-        return "SELL"
-    return "HOLD"
+# Fungsi untuk menjual DOGE
+def place_sell_order(qty):
+    price = exchange.fetch_ticker("DOGE/USDT")["last"]
+    order = exchange.create_market_sell_order("DOGE/USDT", qty)
+    send_telegram_message(f"📢 SELL Order Executed: {qty:.2f} DOGE @ {price:.4f} USDT\n💰 Balance: {get_balance():.2f} USDT")
 
-# ✅ FUNGSI EKSEKUSI ORDER
-def place_order(symbol, signal, amount=10):  # Default 10 USDT
-    try:
-        if signal == "BUY":
-            order = binance.create_market_buy_order(symbol, amount / binance.fetch_ticker(symbol)["close"])
-        elif signal == "SELL":
-            order = binance.create_market_sell_order(symbol, amount / binance.fetch_ticker(symbol)["close"])
-        else:
-            return None
-        
-        print(f"Order Executed: {order}")
-        send_telegram_message(f"📢 {signal} Order Executed: {order}")
-        return order
-    except Exception as e:
-        print(f"Error placing order: {e}")
-        send_telegram_message(f"❌ Order Error: {e}")
-        return None
-
-# ✅ FUNGSI TP1, TP2, SL
-def manage_trade(symbol, entry_price, tp1_ratio=1.02, tp2_ratio=1.05, sl_ratio=0.98):
-    tp1 = entry_price * tp1_ratio
-    tp2 = entry_price * tp2_ratio
-    sl = entry_price * sl_ratio
-
+# Fungsi utama trading
+def trading_bot():
+    position = None
+    buy_price = 0
     while True:
-        current_price = binance.fetch_ticker(symbol)["close"]
-        
-        if current_price >= tp1:
-            send_telegram_message(f"✅ TP1 HIT: {current_price}")
-            break
-        elif current_price >= tp2:
-            send_telegram_message(f"✅ TP2 HIT: {current_price}")
-            break
-        elif current_price <= sl:
-            send_telegram_message(f"🚨 STOP LOSS HIT: {current_price}")
-            break
+        df = fetch_ohlcv()
+        df = analyze_market(df)
+        sentiment = get_sentiment()
 
-        time.sleep(10)  # Cek harga setiap 10 detik
+        latest = df.iloc[-1]
+        price = latest["close"]
 
-# ✅ LOOPING UTAMA BOT
-symbol = "BTC/USDT"
+        # Syarat Open Posisi BUY
+        if position is None and latest["rsi"] < 35 and latest["ema50"] > latest["ema200"] and latest["macd"] > latest["macd_signal"] and latest["close"] <= latest["bb_lower"] and sentiment == "bullish":
+            buy_price = place_buy_order()
+            position = "long"
 
-while True:
-    signal = analyze_market(symbol)
-    if signal in ["BUY", "SELL"]:
-        order = place_order(symbol, signal)
-        if order:
-            entry_price = order["price"]
-            manage_trade(symbol, entry_price)
+        # Syarat Take Profit 1
+        elif position == "long" and price >= buy_price * 1.02:
+            qty = exchange.fetch_balance()['free']['DOGE'] / 2
+            place_sell_order(qty)
+            send_telegram_message(f"🎯 TP1 Tercapai: {price:.4f} USDT")
 
-    print(f"Waiting... ({signal})")
-    time.sleep(60)  # Cek market setiap 1 menit
+        # Syarat Take Profit 2
+        elif position == "long" and price >= buy_price * 1.04:
+            qty = exchange.fetch_balance()['free']['DOGE']
+            place_sell_order(qty)
+            send_telegram_message(f"🏆 TP2 Tercapai: {price:.4f} USDT")
+            position = None
+
+        # Stop Loss jika harga turun -1.5%
+        elif position == "long" and price <= buy_price * 0.985:
+            qty = exchange.fetch_balance()['free']['DOGE']
+            place_sell_order(qty)
+            send_telegram_message(f"❌ STOP LOSS: {price:.4f} USDT")
+            position = None
+
+        time.sleep(60)
+
+# Menjalankan bot
+if __name__ == "__main__":
+    send_telegram_message("🚀 Bot AI Trading DOGE/USDT dimulai!")
+    trading_bot()
