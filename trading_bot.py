@@ -1,97 +1,103 @@
 import logging
 import pandas as pd
 import numpy as np
-import talib
-import xgboost as xgb
+import time
 from binance.client import Client
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
+
+# Konfigurasi logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class TradingBot:
-    def __init__(self, symbol, timeframe):
+    def __init__(self, symbol="BTCUSDT", timeframe="1h"):
         self.symbol = symbol
         self.timeframe = timeframe
-        self.client = Client(api_key="6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj", api_secret="HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0")
-        self.model = xgb.XGBClassifier(n_estimators=500, max_depth=8, learning_rate=0.03, use_label_encoder=False, eval_metric="logloss")
+        self.client = Client(api_key="API_KEY", api_secret="API_SECRET")
         self.scaler = StandardScaler()
-        self.data = None
-        self.tp_multiplier = 1.02   # Take Profit 2%
-        self.sl_multiplier = 0.98   # Stop Loss 2%
-    
-    def fetch_data(self, limit=5000):
-       def fetch_data(self, limit=5000):
-    try:
-        klines = self.client.get_klines(symbol=self.symbol, interval=self.timeframe, limit=limit)
-        if not klines:  # Jika data kosong
-            logging.error("⚠️ Binance API tidak mengembalikan data!")
-            return pd.DataFrame()  # Return dataframe kosong
-        
-        df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', '_', '_', '_', '_', '_', '_'])
-        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].astype(float)
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        self.model = xgb.XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False, eval_metric="logloss")
+        self.take_profit_1 = 1.02  # 2% TP1
+        self.take_profit_2 = 1.05  # 5% TP2
+        self.stop_loss = 0.98      # 2% SL
 
-        # Tambahkan indikator teknikal
-        df["rsi"] = talib.RSI(df["close"], timeperiod=14)
-        df["macd"], df["macd_signal"], _ = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
-        df["ema50"] = talib.EMA(df["close"], timeperiod=50)
-        df["ema200"] = talib.EMA(df["close"], timeperiod=200)
-        df["atr"] = talib.ATR(df["high"], df["low"], df["close"], timeperiod=14)
+    def fetch_data(self, limit=50):
+        """Mengambil data candle dari Binance"""
+        try:
+            klines = self.client.get_klines(symbol=self.symbol, interval=self.timeframe, limit=limit)
+            df = pd.DataFrame(klines, columns=["time", "open", "high", "low", "close", "volume",
+                                               "close_time", "quote_asset_volume", "trades",
+                                               "taker_base_vol", "taker_quote_vol", "ignore"])
+            df["close"] = df["close"].astype(float)
+            df["open"] = df["open"].astype(float)
+            df["high"] = df["high"].astype(float)
+            df["low"] = df["low"].astype(float)
+            return df
+        except Exception as e:
+            logging.error(f"❌ Error fetch_data: {e}")
+            return pd.DataFrame()
 
+    def calculate_indicators(self, df):
+        """Menghitung indikator RSI dan MACD"""
+        df["returns"] = df["close"].pct_change()
+        df["rsi"] = 100 - (100 / (1 + df["returns"].rolling(14).mean() / df["returns"].rolling(14).std()))
+        df["macd"] = df["close"].ewm(span=12, adjust=False).mean() - df["close"].ewm(span=26, adjust=False).mean()
+        df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
         df.dropna(inplace=True)
-
-        # Tambahkan log jumlah data
-        logging.info(f"📊 Data berhasil diambil: {len(df)} baris")
-
         return df
-    except Exception as e:
-        logging.error(f"❌ Error saat fetch data: {e}")
-        return pd.DataFrame()  # Return dataframe kosong jika error
 
     def train_model(self):
-        self.data = self.fetch_data()
-        X = self.data[['rsi', 'macd', 'macd_signal', 'ema50', 'ema200', 'stochastic', 'adx', 'atr', 'bb_upper', 'bb_lower', 'volatility', 'volume_change']]
-        y = (self.data['close'].shift(-1) > self.data['close']).astype(int)
+        """Melatih model Machine Learning"""
+        df = self.fetch_data(limit=100)
+        df = self.calculate_indicators(df)
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        self.scaler.fit(X_train)
-        X_train_scaled = self.scaler.transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
+        if df.empty:
+            logging.error("❌ Data tidak tersedia untuk training.")
+            return
 
-        self.model.fit(X_train_scaled, y_train)
-        accuracy = cross_val_score(self.model, X_test_scaled, y_test, cv=5).mean()
-        logging.info(f"✅ Model Training Selesai! Akurasi: {accuracy:.2%}")
+        features = df[["rsi", "macd", "macd_signal"]]
+        labels = np.where(df["returns"].shift(-1) > 0, 1, 0)
 
-    def predict(self, latest_data):
-        X_new = latest_data[['rsi', 'macd', 'macd_signal', 'ema50', 'ema200', 'stochastic', 'adx', 'atr', 'bb_upper', 'bb_lower', 'volatility', 'volume_change']].values.reshape(1, -1)
-        X_new_scaled = self.scaler.transform(X_new)
-        prediction = self.model.predict(X_new_scaled)[0]
-        return prediction
+        self.scaler.fit(features)
+        features_scaled = self.scaler.transform(features)
 
-    def execute_trade(self, price, action, atr_value):
-        if action == "BUY":
-            tp_price = price * self.tp_multiplier  # Take Profit 2%
-            sl_price = price - (atr_value * 1.5)  # ATR-based Stop Loss
+        self.model.fit(features_scaled, labels)
+        acc = self.model.score(features_scaled, labels) * 100
+        logging.info(f"✅ Model Training Selesai! Akurasi: {acc:.2f}%")
 
-            logging.info(f"✅ ORDER BUY @ {price:.2f} | TP: {tp_price:.2f}, SL: {sl_price:.2f}")
-        elif action == "SELL":
-            logging.info(f"✅ ORDER SELL @ {price:.2f}")
+    def predict_signal(self):
+        """Memprediksi sinyal trading"""
+        df = self.fetch_data(limit=20)
+        df = self.calculate_indicators(df)
+
+        if df.empty:
+            return None
+
+        latest = df.iloc[-1]
+        features = np.array([[latest["rsi"], latest["macd"], latest["macd_signal"]]])
+        features_scaled = self.scaler.transform(features)
+        prediction = self.model.predict(features_scaled)[0]
+
+        logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['rsi']:.2f}, MACD: {latest['macd']:.2f}")
+        return "BUY" if prediction == 1 else "NO ACTION"
+
+    def execute_trade(self, signal):
+        """Eksekusi perdagangan berdasarkan sinyal"""
+        if signal == "BUY":
+            price = float(self.client.get_symbol_ticker(symbol=self.symbol)["price"])
+            tp1 = price * self.take_profit_1
+            tp2 = price * self.take_profit_2
+            sl = price * self.stop_loss
+
+            logging.info(f"✅ BUY order ditempatkan pada {price:.2f}, TP1: {tp1:.2f}, TP2: {tp2:.2f}, SL: {sl:.2f}")
 
     def run(self):
-    self.train_model()
-    while True:
-        df = self.fetch_data(limit=50)
-        
-        if df.empty:  # Cek apakah data kosong
-            logging.warning("⚠️ Data kosong, skip iterasi...")
-            continue
+        """Menjalankan bot trading"""
+        logging.info("🚀 Memulai bot trading...")
+        self.train_model()
 
-        latest = df.iloc[-1]  # Ambil data terakhir
-        action = self.predict(latest)
+        while True:
+            signal = self.predict_signal()
+            if signal:
+                self.execute_trade(signal)
 
-        logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['rsi']:.2f}, MACD: {latest['macd']:.2f}, ATR: {latest['atr']:.2f}")
-
-        if action == 1:
-            self.execute_trade(latest["close"], "BUY", latest["atr"])
-        else:
-            logging.info("❌ Model ML memprediksi: Tidak ada aksi")
+            time.sleep(60)
