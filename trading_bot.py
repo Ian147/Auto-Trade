@@ -8,8 +8,8 @@ from ta.trend import EMAIndicator
 from ta.volatility import BollingerBands
 
 # Konfigurasi API Binance
-BINANCE_API_KEY = "6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj"
-BINANCE_SECRET_KEY = "HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0"
+BINANCE_API_KEY = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
+BINANCE_SECRET_KEY = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
 
 binance = ccxt.binance({
     "apiKey": BINANCE_API_KEY,
