@@ -13,7 +13,7 @@ class TradingBot:
     def __init__(self, symbol="BTCUSDT", timeframe="1h"):
         self.symbol = symbol
         self.timeframe = timeframe
-        self.client = Client(api_key="API_KEY", api_secret="API_SECRET")
+        self.client = Client(api_key="6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj", api_secret="HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0")
         self.scaler = StandardScaler()
         self.model = xgb.XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False, eval_metric="logloss")
         self.take_profit_1 = 1.02  # 2% TP1
