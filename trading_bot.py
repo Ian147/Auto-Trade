@@ -12,8 +12,8 @@ from tensorflow.keras.layers import LSTM, Dense
 
 # Konfigurasi Binance API
 binance = ccxt.binance({
-    'apiKey': 'YOUR_API_KEY',
-    'secret': 'YOUR_SECRET_KEY',
+    'apiKey': '6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj',
+    'secret': 'HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0',
     'options': {'defaultType': 'future'}
 })
 
