@@ -130,5 +130,4 @@ def run_bot():
 
 # Jalankan bot
 if __name__ == "__main__":
-    send_telegram_message("🤖 Bot AI Trading BTC/USDT dimulai...")
-    run_bot()
+asyncio.run(send_telegram_message("🤖 Bot AI Trading BTC/USDT dimulai..."))
