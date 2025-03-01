@@ -2,7 +2,7 @@ import os
 import ccxt
 import pandas as pd
 import numpy as np
-import request
+import requests
 import asyncio
 import time
 from dotenv import load_dotenv
