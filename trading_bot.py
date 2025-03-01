@@ -12,7 +12,7 @@ class TradingBot:
     def __init__(self, symbol, timeframe):
         self.symbol = symbol
         self.timeframe = timeframe
-        self.client = Client(api_key="YOUR_API_KEY", api_secret="YOUR_API_SECRET")
+        self.client = Client(api_key="6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj", api_secret="HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0")
         self.model = xgb.XGBClassifier(n_estimators=500, max_depth=8, learning_rate=0.03, use_label_encoder=False, eval_metric="logloss")
         self.scaler = StandardScaler()
         self.data = None
