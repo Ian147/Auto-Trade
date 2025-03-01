@@ -1,82 +1,109 @@
-import ccxt
-import pandas as pd
-import numpy as np
 import logging
+import pandas as pd
 import time
+import talib
+import xgboost as xgb
+from binance.client import Client
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBClassifier
-from talib import RSI, MACD, BBANDS
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+# API Key Binance (Ganti dengan milikmu)
+API_KEY = "YOUR_BINANCE_API_KEY"
+API_SECRET = "YOUR_BINANCE_SECRET_KEY"
 
 class TradingBot:
     def __init__(self, symbol, timeframe):
+        self.client = Client(API_KEY, API_SECRET)
         self.symbol = symbol
         self.timeframe = timeframe
-        self.exchange = ccxt.binance()
-        self.model = XGBClassifier(use_label_encoder=False, eval_metric="logloss")
-        self.scaler = StandardScaler()
-        self.features = ["RSI", "MACD", "MACD_Signal", "Upper_BB", "Middle_BB", "Lower_BB"]
         self.data = None
+        self.model = None
+        self.scaler = StandardScaler()
+        self.last_entry_price = None
 
-    def fetch_data(self, limit=100):
-        logging.info(f"📊 Mengambil data {self.symbol} dari Binance...")
-        ohlcv = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, limit=limit)
-        df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    def fetch_data(self, limit=500):
+        """Mengambil data historis dari Binance"""
+        klines = self.client.get_klines(symbol=self.symbol, interval=self.timeframe, limit=limit)
+        df = pd.DataFrame(klines, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "close_time", "quote_asset_volume", "number_of_trades",
+            "taker_buy_base", "taker_buy_quote", "ignore"
+        ])
+        df["close"] = df["close"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["open"] = df["open"].astype(float)
+        return df
 
-        # Hitung indikator teknikal
-        df["RSI"] = RSI(df["close"], timeperiod=14)
-        macd, macd_signal, _ = MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
-        df["MACD"] = macd
-        df["MACD_Signal"] = macd_signal
-        upper, middle, lower = BBANDS(df["close"], timeperiod=20)
-        df["Upper_BB"] = upper
-        df["Middle_BB"] = middle
-        df["Lower_BB"] = lower
-
+    def add_indicators(self, df):
+        """Menambahkan indikator teknikal"""
+        df["RSI"] = talib.RSI(df["close"], timeperiod=14)
+        df["MACD"], df["MACD_signal"], _ = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
+        df["EMA9"] = talib.EMA(df["close"], timeperiod=9)
+        df["EMA21"] = talib.EMA(df["close"], timeperiod=21)
+        df["ATR"] = talib.ATR(df["high"], df["low"], df["close"], timeperiod=14)
+        df["Stoch_K"], df["Stoch_D"] = talib.STOCH(df["high"], df["low"], df["close"])
         df.dropna(inplace=True)
-        df.to_csv(f"{self.symbol.replace('/', '_')}_data.csv", index=False)
-        logging.info("✅ Data BTC/USDT disimpan ke CSV.")
         return df
 
     def train_model(self):
-        self.data = self.fetch_data(limit=200)
-        X = self.data[self.features]
-        y = np.random.choice([0, 1], size=len(X))  # Dummy labels
+        """Melatih model Machine Learning"""
+        logging.info("📈 Melatih model Machine Learning...")
 
-        # Normalisasi fitur
-        self.scaler.fit(X)
-        X_scaled = self.scaler.transform(X)
+        self.data = self.fetch_data()
+        self.data = self.add_indicators(self.data)
 
-        # Latih model
-        self.model.fit(X_scaled, y)
-        logging.info("✅ Model Training Selesai! Akurasi: 64.29%")
+        features = ["RSI", "MACD", "MACD_signal", "EMA9", "EMA21", "ATR", "Stoch_K", "Stoch_D"]
+        X = self.data[features]
+        y = (self.data["close"].shift(-1) > self.data["close"]).astype(int)
 
-    def analyze_market(self):
-        self.data = self.fetch_data(limit=50)
-        latest = self.data.iloc[-1]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        self.scaler.fit(X_train)
+        X_train_scaled = self.scaler.transform(X_train)
+        X_test_scaled = self.scaler.transform(X_test)
 
-        logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}, MACD Signal: {latest['MACD_Signal']:.2f}")
+        self.model = xgb.XGBClassifier(n_estimators=500, learning_rate=0.05, max_depth=6, use_label_encoder=False)
+        self.model.fit(X_train_scaled, y_train)
 
-        # Buat DataFrame dengan nama kolom yang benar
-        X_latest = pd.DataFrame([latest[self.features].values], columns=self.features)
+        predictions = self.model.predict(X_test_scaled)
+        accuracy = accuracy_score(y_test, predictions)
+        logging.info(f"✅ Model Training Selesai! Akurasi: {accuracy * 100:.2f}%")
 
-        # Transformasi menggunakan scaler yang sudah dilatih
-        X_latest_scaled = self.scaler.transform(X_latest)
+    def execute_trade(self, signal, price):
+        """Eksekusi trade dengan Take Profit dan Stop Loss"""
+        if signal == "BUY":
+            self.last_entry_price = price
+            take_profit_1 = price * 1.015
+            take_profit_2 = price * 1.03
+            stop_loss = price * 0.985
 
-        # Prediksi
-        prediction = self.model.predict(X_latest_scaled)[0]
+            logging.info(f"🔵 BUY order at {price:.2f}")
+            logging.info(f"🎯 Take Profit 1: {take_profit_1:.2f}, Take Profit 2: {take_profit_2:.2f}")
+            logging.info(f"⛔ Stop Loss: {stop_loss:.2f}")
 
-        if prediction == 1:
-            logging.info("✅ Model ML memprediksi: BUY SIGNAL")
-            self.place_order("buy")
-        else:
-            logging.info("❌ Model ML memprediksi: Tidak ada aksi")
-
-    def place_order(self, side):
-        logging.info(f"🔔 Menjalankan order {side.upper()} untuk {self.symbol}... (Simulasi)")
+        elif signal == "SELL" and self.last_entry_price:
+            logging.info(f"🔴 SELL order at {price:.2f}, Profit: {price - self.last_entry_price:.2f}")
 
     def run(self):
+        """Menjalankan bot trading"""
         self.train_model()
+        
         while True:
-            self.analyze_market()
-            time.sleep(60)
+            df = self.fetch_data(limit=50)
+            df = self.add_indicators(df)
+            latest = df.iloc[-1]
+
+            features = ["RSI", "MACD", "MACD_signal", "EMA9", "EMA21", "ATR", "Stoch_K", "Stoch_D"]
+            X_latest = self.scaler.transform([latest[features].values])
+            prediction = self.model.predict(X_latest)
+
+            logging.info(f"📊 Harga: {latest['close']:.2f}, RSI: {latest['RSI']:.2f}, MACD: {latest['MACD']:.2f}")
+            
+            if prediction == 1:
+                logging.info("✅ Model ML memprediksi: BUY")
+                self.execute_trade("BUY", latest["close"])
+            else:
+                logging.info("❌ Model ML memprediksi: Tidak ada aksi")
+
+            time.sleep(60)  # Tunggu 1 menit sebelum analisis ulang
