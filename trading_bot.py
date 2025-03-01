@@ -9,8 +9,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 # API Key Binance (Ganti dengan milikmu)
-API_KEY = "YOUR_BINANCE_API_KEY"
-API_SECRET = "YOUR_BINANCE_SECRET_KEY"
+API_KEY = "6ipqniXiFRmjwGsB8H9vUpgVTexAnsLZ2Ybi0DrLxSKKINMr42wCC8ex7rIrqNlj"
+API_SECRET = "HeINMThVDiJuCaoZFvC16FNj0ZCx9uGs2BxkkS1qTB3PkGTmibXfba3l8DajJ3x0"
 
 class TradingBot:
     def __init__(self, symbol, timeframe):
