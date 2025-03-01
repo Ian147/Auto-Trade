@@ -7,6 +7,7 @@ import requests
 from ta.trend import SMAIndicator, MACD
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
+import asyncio
 from telegram import Bot
 
 # Konfigurasi API Binance
@@ -26,10 +27,16 @@ TP1_PERCENT = 1.5  # 1.5% profit
 TP2_PERCENT = 3.0  # 3.0% profit
 SL_PERCENT = 1.0   # 1.0% stop loss
 
-# Fungsi untuk mengirim notifikasi ke Telegram
-def send_telegram_message(message):
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+# Fungsi untuk mengirim notifikasi ke Telegram (async)
+async def send_telegram_message(message):
+    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
 
+# Fungsi untuk memanggil async function dari kode sync
+def notify_telegram(message):
+    asyncio.run(send_telegram_message(message))
+
+# Contoh penggunaan
+notify_telegram("🤖 Bot AI Trading BTC/USDT dimulai...")
 # Fungsi untuk mendapatkan harga historis
 def get_price_data():
     klines = client.get_klines(symbol=PAIR, interval=Client.KLINE_INTERVAL_15MINUTE, limit=50)
