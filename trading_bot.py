@@ -44,6 +44,13 @@ def send_telegram_message(message):
     except Exception as e:
         logging.error(f"Error mengirim pesan Telegram: {e}")
 
+# Fungsi untuk Mengecek Saldo Spot
+def check_balance():
+    balance = binance.fetch_balance()
+    spot_balance = balance['total']['USDT']
+    logging.info(f"Saldo spot: {spot_balance} USDT")
+    return spot_balance
+
 # Fungsi Open Order
 def place_order(order_type):
     try:
@@ -183,20 +190,27 @@ def trading_bot():
 
     while True:
         try:
-            current_price = binance.fetch_ticker(symbol)["last"]
-            logging.info(f"Harga saat ini: {current_price} USDT")
+            # Mengecek saldo sebelum membuka posisi
+            spot_balance = check_balance()
 
-            # Prediksi harga menggunakan LSTM
-            predicted_price = predict_price(model, scaler)
-            logging.info(f"Harga yang diprediksi: {predicted_price} USDT")
+            if spot_balance >= trade_amount:
+                # Cek harga saat ini
+                current_price = binance.fetch_ticker(symbol)["last"]
+                logging.info(f"Harga saat ini: {current_price} USDT")
 
-            # Evaluasi sinyal (misalnya, sinyal beli jika prediksi harga lebih tinggi)
-            if predicted_price > current_price * 1.01:  # Harga diprediksi naik
-                entry_price = place_order("BUY")
-                if entry_price:
-                    check_tp_sl(entry_price)
+                # Prediksi harga menggunakan LSTM
+                predicted_price = predict_price(model, scaler)
+                logging.info(f"Harga yang diprediksi: {predicted_price} USDT")
 
-            time.sleep(60)  # Cek sinyal setiap 1 menit
+                # Evaluasi sinyal (misalnya, sinyal beli jika prediksi harga lebih tinggi)
+                if predicted_price > current_price * 1.01:  # Harga diprediksi naik
+                    entry_price = place_order("BUY")
+                    if entry_price:
+                        check_tp_sl(entry_price)
+            else:
+                logging.info("Saldo tidak mencukupi untuk membuka posisi. Menunggu saldo tersedia...")
+
+            time.sleep(60)  # Cek saldo dan sinyal setiap 1 menit
         except Exception as e:
             logging.error(f"Error utama: {e}")
             send_telegram_message(f"⚠️ *Error:* {e}")
