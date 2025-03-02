@@ -38,21 +38,43 @@ def send_telegram_message(message):
 
 # Mengambil data harga & indikator untuk Machine Learning
 def get_training_data():
-    ohlcv = binance.fetch_ohlcv(symbol, timeframe="15m", limit=500)  # Ambil lebih banyak data
+    ohlcv = binance.fetch_ohlcv(symbol, timeframe="15m", limit=500)
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
+    # Moving Averages
     df["ma9"] = df["close"].rolling(window=9).mean()
     df["ma21"] = df["close"].rolling(window=21).mean()
 
+    # MACD
+    df["ema12"] = df["close"].ewm(span=12, adjust=False).mean()
+    df["ema26"] = df["close"].ewm(span=26, adjust=False).mean()
+    df["macd"] = df["ema12"] - df["ema26"]
+    df["signal_macd"] = df["macd"].ewm(span=9, adjust=False).mean()
+
+    # Bollinger Bands
+    df["sma20"] = df["close"].rolling(window=20).mean()
+    df["stddev"] = df["close"].rolling(window=20).std()
+    df["upper_band"] = df["sma20"] + (df["stddev"] * 2)
+    df["lower_band"] = df["sma20"] - (df["stddev"] * 2)
+
+    # ATR (Average True Range)
+    df["high-low"] = df["high"] - df["low"]
+    df["high-close"] = np.abs(df["high"] - df["close"].shift())
+    df["low-close"] = np.abs(df["low"] - df["close"].shift())
+    df["true_range"] = df[["high-low", "high-close", "low-close"]].max(axis=1)
+    df["atr"] = df["true_range"].rolling(window=14).mean()
+
+    # RSI
     delta = df["close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df["rsi"] = 100 - (100 / (1 + rs))
 
+    # Sinyal Buy & Sell
     df["signal"] = 0
-    df.loc[(df["ma9"] > df["ma21"]) & (df["rsi"] < 35), "signal"] = 1
-    df.loc[(df["ma9"] < df["ma21"]) & (df["rsi"] > 70), "signal"] = -1
+    df.loc[(df["ma9"] > df["ma21"]) & (df["rsi"] < 35) & (df["macd"] > df["signal_macd"]), "signal"] = 1
+    df.loc[(df["ma9"] < df["ma21"]) & (df["rsi"] > 70) & (df["macd"] < df["signal_macd"]), "signal"] = -1
 
     df.dropna(inplace=True)
     return df
@@ -60,7 +82,7 @@ def get_training_data():
 # Training Model Machine Learning
 def train_ml_model():
     df = get_training_data()
-    X = df[["ma9", "ma21", "rsi"]]
+    X = df[["ma9", "ma21", "rsi", "macd", "signal_macd", "upper_band", "lower_band", "atr"]]
     y = df["signal"]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -79,8 +101,9 @@ def train_ml_model():
 
 # Prediksi AI Signal
 def predict_signal(model, scaler):
-    price, ma9, ma21, rsi = get_price_data()
-    X_input = pd.DataFrame([[ma9, ma21, rsi]], columns=["ma9", "ma21", "rsi"])
+    price, ma9, ma21, rsi, macd, signal_macd, upper_band, lower_band, atr = get_price_data()
+    X_input = pd.DataFrame([[ma9, ma21, rsi, macd, signal_macd, upper_band, lower_band, atr]],
+                           columns=["ma9", "ma21", "rsi", "macd", "signal_macd", "upper_band", "lower_band", "atr"])
     X_scaled = scaler.transform(X_input)
 
     prediction = model.predict(X_scaled)[0]
@@ -105,47 +128,24 @@ def get_price_data():
     ma9 = np.mean(close_prices[-9:])
     ma21 = np.mean(close_prices[-21:])
 
-    delta = np.diff(close_prices)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = np.mean(gain[-14:])
-    avg_loss = np.mean(loss[-14:])
-    rs = avg_gain / avg_loss if avg_loss != 0 else 0
-    rsi = 100 - (100 / (1 + rs))
+    # MACD
+    ema12 = pd.Series(close_prices).ewm(span=12).mean().iloc[-1]
+    ema26 = pd.Series(close_prices).ewm(span=26).mean().iloc[-1]
+    macd = ema12 - ema26
+    signal_macd = pd.Series(macd).ewm(span=9).mean().iloc[-1]
 
-    return close_prices[-1], ma9, ma21, rsi
+    # Bollinger Bands
+    sma20 = np.mean(close_prices[-20:])
+    stddev = np.std(close_prices[-20:])
+    upper_band = sma20 + (stddev * 2)
+    lower_band = sma20 - (stddev * 2)
 
-# Mengecek saldo USDT
-def check_balance():
-    balance = binance.fetch_balance()
-    return balance['total'].get('USDT', 0)
+    # ATR
+    atr = np.mean(np.abs(np.diff(close_prices)[-14:]))
 
-# Mengecek saldo BTC yang sedang di-hold
-def check_btc_balance():
-    balance = binance.fetch_balance()
-    return balance['total'].get('BTC', 0)
+    return close_prices[-1], ma9, ma21, rsi, macd, signal_macd, upper_band, lower_band, atr
 
-# Melakukan order BUY atau SELL
-def place_order(signal, price):
-    usdt_balance = check_balance()
-
-    if usdt_balance < min_balance:
-        send_telegram_message("⚠️ *Saldo tidak cukup untuk trading!*")
-        return
-
-    order_amount = trade_amount / price
-
-    if signal == "BUY":
-        send_telegram_message(f"📈 *BUY Order Executed*\n🔹 *Price:* {price:.2f} USDT")
-        binance.create_market_buy_order(symbol, order_amount)
-
-    elif signal == "SELL":
-        btc_balance = check_btc_balance()
-        if btc_balance > 0:
-            send_telegram_message(f"📉 *SELL Order Executed*\n🔹 *Price:* {price:.2f} USDT")
-            binance.create_market_sell_order(symbol, btc_balance)
-
-# Fungsi utama bot
+# Jalankan bot
 def trading_bot():
     print("🔄 Training AI Model...")
     model, scaler = train_ml_model()
@@ -158,5 +158,5 @@ def trading_bot():
             send_telegram_message(f"⚠️ *Error:* {e}")
             time.sleep(10)
 
-# Jalankan bot
+# Eksekusi bot
 trading_bot()
