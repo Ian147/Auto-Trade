@@ -26,10 +26,6 @@ binance = ccxt.binance({
 symbol = "BTC/USDT"
 min_balance = 10   # Minimal saldo USDT
 trade_amount = 5   # Order 5 USDT per transaksi
-take_profit_pct = 0.02  # +2% dari harga beli
-stop_loss_pct = 0.02  # -2% dari harga beli
-
-last_buy_price = None  # Untuk menyimpan harga beli terakhir
 
 # Fungsi Kirim Notifikasi ke Telegram
 def send_telegram_message(message):
@@ -42,26 +38,23 @@ def send_telegram_message(message):
 
 # Mengambil data harga & indikator untuk Machine Learning
 def get_training_data():
-    ohlcv = binance.fetch_ohlcv(symbol, timeframe="5m", limit=100)
+    ohlcv = binance.fetch_ohlcv(symbol, timeframe="15m", limit=500)  # Ambil lebih banyak data
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
     df["ma9"] = df["close"].rolling(window=9).mean()
     df["ma21"] = df["close"].rolling(window=21).mean()
 
-    # RSI Calculation
     delta = df["close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df["rsi"] = 100 - (100 / (1 + rs))
 
-    # Label: BUY (1) jika MA9 > MA21 dan RSI < 35, SELL (-1) jika MA9 < MA21 dan RSI > 70, else HOLD (0)
     df["signal"] = 0
     df.loc[(df["ma9"] > df["ma21"]) & (df["rsi"] < 35), "signal"] = 1
     df.loc[(df["ma9"] < df["ma21"]) & (df["rsi"] > 70), "signal"] = -1
 
-    df.dropna(inplace=True)  # Hapus data yang memiliki nilai NaN
-
+    df.dropna(inplace=True)
     return df
 
 # Training Model Machine Learning
@@ -87,21 +80,22 @@ def train_ml_model():
 # Prediksi AI Signal
 def predict_signal(model, scaler):
     price, ma9, ma21, rsi = get_price_data()
-    X_input = np.array([[ma9, ma21, rsi]])
+    X_input = pd.DataFrame([[ma9, ma21, rsi]], columns=["ma9", "ma21", "rsi"])
     X_scaled = scaler.transform(X_input)
 
     prediction = model.predict(X_scaled)[0]
 
     if prediction == 1:
         print("🔹 Sinyal AI: BUY")
-        send_telegram_message("🤖 *AI Signal: BUY*")
+        send_telegram_message("🤖 *AI Signal: BUY* 🚀")
         place_order("BUY", price)
     elif prediction == -1:
         print("🔻 Sinyal AI: SELL")
-        send_telegram_message("🤖 *AI Signal: SELL*")
+        send_telegram_message("🤖 *AI Signal: SELL* 📉")
         place_order("SELL", price)
     else:
         print("⏸️ Sinyal AI: HOLD")
+        send_telegram_message("🤖 *AI Signal: HOLD* ⏳")
 
 # Mengambil data harga terbaru
 def get_price_data():
@@ -133,7 +127,6 @@ def check_btc_balance():
 
 # Melakukan order BUY atau SELL
 def place_order(signal, price):
-    global last_buy_price
     usdt_balance = check_balance()
 
     if usdt_balance < min_balance:
@@ -145,18 +138,15 @@ def place_order(signal, price):
     if signal == "BUY":
         send_telegram_message(f"📈 *BUY Order Executed*\n🔹 *Price:* {price:.2f} USDT")
         binance.create_market_buy_order(symbol, order_amount)
-        last_buy_price = price
 
     elif signal == "SELL":
         btc_balance = check_btc_balance()
         if btc_balance > 0:
             send_telegram_message(f"📉 *SELL Order Executed*\n🔹 *Price:* {price:.2f} USDT")
             binance.create_market_sell_order(symbol, btc_balance)
-            last_buy_price = None
 
 # Fungsi utama bot
 def trading_bot():
-    global last_buy_price
     print("🔄 Training AI Model...")
     model, scaler = train_ml_model()
 
