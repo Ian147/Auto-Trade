@@ -22,11 +22,11 @@ api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
 telegram_token = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
 telegram_chat_id = "681125756"
 
-# Inisialisasi Binance
+# Inisialisasi Binance untuk margin
 binance = ccxt.binance({
     "apiKey": api_key,
     "secret": api_secret,
-    "options": {"defaultType": "spot"}
+    "options": {"defaultType": "margin"}
 })
 
 # Pair yang diperdagangkan
@@ -47,36 +47,36 @@ def send_telegram_message(message):
         time.sleep(5)
         send_telegram_message(message)
 
-# Fungsi untuk Mengecek Saldo Spot
-def check_balance():
+# Fungsi untuk Mengecek Saldo Margin
+def check_margin_balance():
     try:
-        balance = binance.fetch_balance()
-        spot_balance = balance['total']['USDT']
-        logging.info(f"Saldo spot: {spot_balance} USDT")
-        return spot_balance
+        balance = binance.fetch_balance({'type': 'margin'})
+        margin_balance = balance['total']['USDT']
+        logging.info(f"Saldo margin: {margin_balance} USDT")
+        return margin_balance
     except Exception as e:
-        logging.error(f"Error saat mengecek saldo: {e}")
-        send_telegram_message(f"⚠️ *Error saat mengecek saldo:* {e}")
+        logging.error(f"Error saat mengecek saldo margin: {e}")
+        send_telegram_message(f"⚠️ *Error saat mengecek saldo margin:* {e}")
         return 0
 
-# Fungsi Open Order
-def place_order(order_type):
+# Fungsi Open Order untuk Margin
+def place_margin_order(order_type):
     try:
-        logging.info(f"Mencoba untuk membuka order {order_type}")
+        logging.info(f"Mencoba untuk membuka order margin {order_type}")
         ticker = binance.fetch_ticker(symbol)
         price = ticker["last"]
         if order_type == "BUY":
-            order = binance.create_market_buy_order(symbol, trade_amount / price)
+            order = binance.create_margin_buy_order(symbol, trade_amount / price)
         else:
-            order = binance.create_market_sell_order(symbol, trade_amount / price)
+            order = binance.create_margin_sell_order(symbol, trade_amount / price)
 
         entry_price = binance.fetch_my_trades(symbol)[-1]['price']
-        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
+        send_telegram_message(f"📈 *{order_type} Margin Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
         logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT")
         return entry_price
     except Exception as e:
-        logging.error(f"Order {order_type} gagal: {e}")
-        send_telegram_message(f"⚠️ *Order Gagal:* {e}")
+        logging.error(f"Order margin {order_type} gagal: {e}")
+        send_telegram_message(f"⚠️ *Order Margin Gagal:* {e}")
         return None
 
 # Fungsi Cek TP dan SL (Menggunakan Threading)
@@ -90,11 +90,11 @@ def check_tp_sl(entry_price):
 
                 # Mengecek jika harga sudah mencapai TP atau SL
                 if current_price >= entry_price * (1 + tp_percentage):
-                    place_order("SELL")  # Menutup posisi untuk TP
+                    place_margin_order("SELL")  # Menutup posisi untuk TP
                     send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
                     break
                 elif current_price <= entry_price * (1 - sl_percentage):
-                    place_order("SELL")  # Menutup posisi untuk SL
+                    place_margin_order("SELL")  # Menutup posisi untuk SL
                     send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
                     break
 
@@ -194,9 +194,9 @@ def trading_bot():
 
     while True:
         try:
-            spot_balance = check_balance()
+            margin_balance = check_margin_balance()
 
-            if spot_balance >= trade_amount:
+            if margin_balance >= trade_amount:
                 current_price = binance.fetch_ticker(symbol)["last"]
                 logging.info(f"Harga saat ini: {current_price} USDT")
 
@@ -206,11 +206,11 @@ def trading_bot():
                 send_telegram_message(f"🔮 *Akurasi Sinyal* : {predicted_price:.2f} USDT")
 
                 if predicted_price > current_price * 1.01:
-                    entry_price = place_order("BUY")
+                    entry_price = place_margin_order("BUY")
                     if entry_price:
                         check_tp_sl(entry_price)
             else:
-                logging.info("Saldo tidak mencukupi untuk membuka posisi. Menunggu saldo tersedia...")
+                logging.info("Saldo margin tidak mencukupi untuk membuka posisi. Menunggu saldo tersedia...")
 
             time.sleep(60)
         except Exception as e:
