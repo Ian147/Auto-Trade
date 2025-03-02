@@ -1,140 +1,135 @@
-
+import ccxt
 import time
 import numpy as np
-import pandas as pd
-from binance.client import Client
-from binance.enums import *
 import requests
-from ta.trend import SMAIndicator, MACD
-from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
-import asyncio
-from telegram import Bot
-from telegram.ext import Updater, CommandHandler, MessageHandler, filters
 
 # Konfigurasi API Binance
-API_KEY = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
-API_SECRET = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
-client = Client(API_KEY, API_SECRET)
+api_key = "MASUKKAN_API_KEY_BINANCE"
+api_secret = "MASUKKAN_SECRET_KEY_BINANCE"
 
-# Konfigurasi Telegram
-TELEGRAM_BOT_TOKEN = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
-TELEGRAM_CHAT_ID = "681125756"
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+# Konfigurasi API Telegram
+telegram_token = "MASUKKAN_TOKEN_BOT_TELEGRAM"
+telegram_chat_id = "MASUKKAN_CHAT_ID_TELEGRAM"
 
-# Parameter Trading
-PAIR = "BTCUSDT"
-TRADE_AMOUNT = 5  # 5 USDT
-TP1_PERCENT = 1.5  # 1.5% profit
-TP2_PERCENT = 3.0  # 3.0% profit
-SL_PERCENT = 1.0   # 1.0% stop loss
+# Inisialisasi Binance
+binance = ccxt.binance({
+    "apiKey": api_key,
+    "secret": api_secret,
+    "options": {"defaultType": "spot"}
+})
 
-# Fungsi untuk mengirim notifikasi ke Telegram (async)
-async def send_telegram_message(message):
-    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+# Pair yang diperdagangkan
+symbol = "DOGE/USDT"
+min_balance = 13  # Saldo minimal untuk trading
+trade_amount = 5  # USDT yang digunakan dalam 1 order (DIPERBARUI ke 5 USDT)
 
-# Fungsi untuk mengirim notifikasi secara async tanpa error event loop
-def notify_telegram(message):
+# Fungsi Kirim Notifikasi ke Telegram
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+    payload = {"chat_id": telegram_chat_id, "text": message, "parse_mode": "Markdown"}
     try:
-        loop = asyncio.get_running_loop()
-        asyncio.create_task(send_telegram_message(message))
-    except RuntimeError:
-        asyncio.run(send_telegram_message(message))
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"Error mengirim pesan Telegram: {e}")
 
-# Kirim notifikasi saat bot dimulai
-notify_telegram("🤖 Bot AI Trading BTC/USDT dimulai...")
-
-# Fungsi untuk mendapatkan harga historis
+# Mengambil data harga, MA, RSI, dan Bollinger Bands
 def get_price_data():
-    klines = client.get_klines(symbol=PAIR, interval=Client.KLINE_INTERVAL_15MINUTE, limit=50)
-    df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 
-                                       'close_time', 'quote_asset_volume', 'num_trades', 
-                                       'taker_buy_base', 'taker_buy_quote', 'ignore'])
-    df['close'] = df['close'].astype(float)
-    return df
+    ohlcv = binance.fetch_ohlcv(symbol, timeframe="5m", limit=50)
+    close_prices = np.array([x[4] for x in ohlcv])
+    volumes = np.array([x[5] for x in ohlcv])
 
-# Fungsi untuk menganalisis sinyal beli/jual dengan AI
-def get_trading_signal():
-    df = get_price_data()
+    # Moving Averages
+    ma9 = np.mean(close_prices[-9:])
+    ma21 = np.mean(close_prices[-21:])
 
-    # Indikator Teknikal
-    df['SMA_50'] = SMAIndicator(df['close'], window=50).sma_indicator()
-    df['SMA_200'] = SMAIndicator(df['close'], window=200).sma_indicator()
-    df['RSI'] = RSIIndicator(df['close'], window=14).rsi()
-    macd = MACD(df['close'])
-    df['MACD'] = macd.macd()
-    df['MACD_signal'] = macd.macd_signal()
-    bb = BollingerBands(df['close'])
-    df['BB_upper'] = bb.bollinger_hband()
-    df['BB_lower'] = bb.bollinger_lband()
+    # RSI Calculation
+    delta = np.diff(close_prices)
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = np.mean(gain[-14:])
+    avg_loss = np.mean(loss[-14:])
+    rs = avg_gain / avg_loss if avg_loss != 0 else 0
+    rsi = 100 - (100 / (1 + rs))
 
-    latest = df.iloc[-1]
+    # Bollinger Bands
+    sma20 = np.mean(close_prices[-20:])
+    std_dev = np.std(close_prices[-20:])
+    upper_band = sma20 + (2 * std_dev)
+    lower_band = sma20 - (2 * std_dev)
 
-    # Sinyal Beli: Harga di atas SMA 50, MACD > Signal, RSI di bawah 70, dan harga dekat BB lower
-    if latest['close'] > latest['SMA_50'] and latest['MACD'] > latest['MACD_signal'] and latest['RSI'] < 70 and latest['close'] <= latest['BB_lower']:
-        return "BUY"
+    # Volume Analysis
+    avg_volume = np.mean(volumes[-10:])
+    last_volume = volumes[-1]
+    volume_signal = "HIGH" if last_volume > avg_volume else "LOW"
 
-    # Sinyal Jual: Harga di bawah SMA 50, MACD < Signal, RSI di atas 30, dan harga dekat BB upper
-    elif latest['close'] < latest['SMA_50'] and latest['MACD'] < latest['MACD_signal'] and latest['RSI'] > 30 and latest['close'] >= latest['BB_upper']:
-        return "SELL"
+    return close_prices[-1], ma9, ma21, rsi, upper_band, lower_band, volume_signal
 
-    return "HOLD"
+# Mengecek saldo USDT
+def check_balance():
+    balance = binance.fetch_balance()
+    usdt_balance = balance['total'].get('USDT', 0)
+    return usdt_balance
 
-# Fungsi untuk cek saldo
-def get_balance():
-    balance = client.get_asset_balance(asset='USDT')
-    return float(balance['free'])
+# Melakukan order BUY atau SELL dan mengirim notifikasi Telegram
+def place_order(signal, price):
+    usdt_balance = check_balance()
 
-# Fungsi untuk menempatkan order
-def place_order(order_type, amount):
-    if order_type == "BUY":
-        order = client.order_market_buy(symbol=PAIR, quoteOrderQty=amount)
-    elif order_type == "SELL":
-        order = client.order_market_sell(symbol=PAIR, quoteOrderQty=amount)
-    return order
+    if usdt_balance < min_balance:
+        print("Saldo tidak cukup untuk trading.")
+        send_telegram_message("⚠️ *Saldo tidak cukup untuk trading!*")
+        return
 
-# Fungsi utama untuk menjalankan bot
-def run_bot():
-    position = None
-    entry_price = None
-    tp1_price = None
-    tp2_price = None
-    sl_price = None
+    order_amount = trade_amount / price  # Open posisi dengan 5 USDT
 
+    if signal == "BUY":
+        print(f"Placing BUY order for {order_amount:.2f} DOGE at {price:.4f}")
+        send_telegram_message(f"📈 *BUY Order Executed*\n🔹 *Amount:* {order_amount:.2f} DOGE\n🔹 *Price:* {price:.4f} USDT")
+        binance.create_market_buy_order(symbol, order_amount)
+
+    elif signal == "SELL":
+        balance = binance.fetch_balance()
+        doge_balance = balance['total'].get('DOGE', 0)
+        if doge_balance > 0:
+            print(f"Placing SELL order for {doge_balance:.2f} DOGE at {price:.4f}")
+            send_telegram_message(f"📉 *SELL Order Executed*\n🔹 *Amount:* {doge_balance:.2f} DOGE\n🔹 *Price:* {price:.4f} USDT")
+            binance.create_market_sell_order(symbol, doge_balance)
+        else:
+            print("Tidak ada DOGE untuk dijual.")
+
+# Fungsi utama bot
+def trading_bot():
     while True:
         try:
-            balance = get_balance()
-            signal = get_trading_signal()
-            price = float(client.get_symbol_ticker(symbol=PAIR)['price'])
+            price, ma9, ma21, rsi, upper_band, lower_band, volume_signal = get_price_data()
+            print(f"Harga: {price:.4f}, MA9: {ma9:.4f}, MA21: {ma21:.4f}, RSI: {rsi:.2f}, Vol: {volume_signal}")
 
-            if position is None and signal == "BUY":
-                order = place_order("BUY", TRADE_AMOUNT)
-                entry_price = price
-                tp1_price = entry_price * (1 + TP1_PERCENT / 100)
-                tp2_price = entry_price * (1 + TP2_PERCENT / 100)
-                sl_price = entry_price * (1 - SL_PERCENT / 100)
-                position = "LONG"
+            # Kirim status saldo dan open posisi
+            usdt_balance = check_balance()
+            open_positions = binance.fetch_balance()['total'].get('DOGE', 0)
+            send_telegram_message(f"💰 *Saldo USDT:* {usdt_balance:.2f}\n🔹 *DOGE dalam Open Posisi:* {open_positions:.2f}")
 
-                notify_telegram(f"🚀 Open Posisi BUY BTC/USDT di {entry_price}\n🎯 TP1: {tp1_price}, TP2: {tp2_price}\n⛔ SL: {sl_price}\n💰 Saldo USDT: {balance}")
+            # **BUY SIGNAL**
+            if ma9 > ma21 and rsi < 35 and price <= lower_band and volume_signal == "HIGH":
+                print("Sinyal: STRONG BUY")
+                send_telegram_message("🟢 *STRONG BUY Signal*")
+                place_order("BUY", price)
 
-            elif position == "LONG":
-                if price >= tp1_price:
-                    notify_telegram(f"✅ TP1 Tercapai di {tp1_price} 🚀")
-                if price >= tp2_price:
-                    order = place_order("SELL", TRADE_AMOUNT)
-                    notify_telegram(f"✅ TP2 Tercapai di {tp2_price}, Close Posisi 🚀")
-                    position = None
-                if price <= sl_price:
-                    order = place_order("SELL", TRADE_AMOUNT)
-                    notify_telegram(f"❌ Stop Loss di {sl_price}, Close Posisi 😞")
-                    position = None
+            # **SELL SIGNAL**
+            elif ma9 < ma21 and rsi > 70 and price >= upper_band and volume_signal == "HIGH":
+                print("Sinyal: STRONG SELL")
+                send_telegram_message("🔴 *STRONG SELL Signal*")
+                place_order("SELL", price)
 
-            time.sleep(60)
+            else:
+                print("Menunggu sinyal trading...")
+                send_telegram_message("⌛ *Menunggu sinyal trading...*")
+
+            time.sleep(60)  # Tunggu 1 menit sebelum iterasi berikutnya
 
         except Exception as e:
-            notify_telegram(f"⚠️ Error: {str(e)}")
-            time.sleep(60)
+            print(f"Error: {e}")
+            send_telegram_message(f"⚠️ *Error:* {e}")
+            time.sleep(10)  # Jika error, tunggu 10 detik sebelum mencoba lagi
 
 # Jalankan bot
-if __name__ == "__main__":
-    run_bot()
+trading_bot()
