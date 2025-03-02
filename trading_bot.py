@@ -49,6 +49,7 @@ def check_balance():
     balance = binance.fetch_balance()
     spot_balance = balance['total']['USDT']
     logging.info(f"Saldo spot: {spot_balance} USDT")
+    send_telegram_message(f"💰 *Saldo Spot* : {spot_balance} USDT")  # Kirim saldo spot ke Telegram
     return spot_balance
 
 # Fungsi Open Order
@@ -161,6 +162,7 @@ def train_lstm_model():
         # Jika MAE menunjukkan akurasi di atas 90%, berhenti melatih
         if mae < 0.1:  # Misalnya, MAE yang rendah menunjukkan akurasi tinggi
             logging.info(f"Model mencapai akurasi yang diinginkan dengan MAE: {mae}. Model siap untuk dijalankan!")
+            send_telegram_message(f"📊 *Model Akurasi*: {mae:.4f}")  # Kirim akurasi model ke Telegram
             break
 
     return model, scaler
@@ -203,6 +205,8 @@ def trading_bot():
                 logging.info(f"Harga yang diprediksi: {predicted_price} USDT")
 
                 # Evaluasi sinyal (misalnya, sinyal beli jika prediksi harga lebih tinggi)
+                send_telegram_message(f"🔮 *Akurasi Sinyal* : {predicted_price:.2f} USDT")  # Kirim akurasi sinyal ke Telegram
+
                 if predicted_price > current_price * 1.01:  # Harga diprediksi naik
                     entry_price = place_order("BUY")
                     if entry_price:
