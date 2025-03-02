@@ -90,11 +90,11 @@ def check_tp_sl(entry_price):
 
                 # Mengecek jika harga sudah mencapai TP atau SL
                 if current_price >= entry_price * (1 + tp_percentage):
-                    place_order("SELL")
+                    place_order("SELL")  # Menutup posisi untuk TP
                     send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
                     break
                 elif current_price <= entry_price * (1 - sl_percentage):
-                    place_order("SELL")
+                    place_order("SELL")  # Menutup posisi untuk SL
                     send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
                     break
 
