@@ -3,9 +3,10 @@ import time
 import numpy as np
 import requests
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from sklearn.preprocessing import MinMaxScaler
 
 # Konfigurasi API Binance
 api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
@@ -36,132 +37,83 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Error mengirim pesan Telegram: {e}")
 
-# Mengambil data harga & indikator untuk Machine Learning
+# Mengambil data harga untuk LSTM
 def get_training_data():
     ohlcv = binance.fetch_ohlcv(symbol, timeframe="15m", limit=500)
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["close"] = df["close"].astype(float)
 
-    # Moving Averages
-    df["ma9"] = df["close"].rolling(window=9).mean()
-    df["ma21"] = df["close"].rolling(window=21).mean()
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(df["close"].values.reshape(-1, 1))
 
-    # MACD
-    df["ema12"] = df["close"].ewm(span=12, adjust=False).mean()
-    df["ema26"] = df["close"].ewm(span=26, adjust=False).mean()
-    df["macd"] = df["ema12"] - df["ema26"]
-    df["signal_macd"] = df["macd"].ewm(span=9, adjust=False).mean()
+    sequence_length = 50
+    X, y = [], []
+    for i in range(sequence_length, len(scaled_data)):
+        X.append(scaled_data[i-sequence_length:i, 0])
+        y.append(scaled_data[i, 0])
 
-    # Bollinger Bands
-    df["sma20"] = df["close"].rolling(window=20).mean()
-    df["stddev"] = df["close"].rolling(window=20).std()
-    df["upper_band"] = df["sma20"] + (df["stddev"] * 2)
-    df["lower_band"] = df["sma20"] - (df["stddev"] * 2)
+    X, y = np.array(X), np.array(y)
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
 
-    # ATR (Average True Range)
-    df["high-low"] = df["high"] - df["low"]
-    df["high-close"] = np.abs(df["high"] - df["close"].shift())
-    df["low-close"] = np.abs(df["low"] - df["close"].shift())
-    df["true_range"] = df[["high-low", "high-close", "low-close"]].max(axis=1)
-    df["atr"] = df["true_range"].rolling(window=14).mean()
+    return X, y, scaler
 
-    # RSI
-    delta = df["close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df["rsi"] = 100 - (100 / (1 + rs))
+# Training Model LSTM
+def train_lstm_model():
+    X, y, scaler = get_training_data()
 
-    # Sinyal Buy & Sell
-    df["signal"] = 0
-    df.loc[(df["ma9"] > df["ma21"]) & (df["rsi"] < 35) & (df["macd"] > df["signal_macd"]), "signal"] = 1
-    df.loc[(df["ma9"] < df["ma21"]) & (df["rsi"] > 70) & (df["macd"] < df["signal_macd"]), "signal"] = -1
+    model = Sequential([
+        LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)),
+        Dropout(0.2),
+        LSTM(units=50, return_sequences=False),
+        Dropout(0.2),
+        Dense(units=25),
+        Dense(units=1)
+    ])
 
-    df.dropna(inplace=True)
-    return df
-
-# Training Model Machine Learning
-def train_ml_model():
-    df = get_training_data()
-    X = df[["ma9", "ma21", "rsi", "macd", "signal_macd", "upper_band", "lower_band", "atr"]]
-    y = df["signal"]
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train_scaled, y_train)
-
-    accuracy = model.score(X_test_scaled, y_test)
-    print(f"🎯 Model Accuracy: {accuracy:.2f}")
+    model.compile(optimizer="adam", loss="mean_squared_error")
+    model.fit(X, y, epochs=20, batch_size=32, verbose=1)
 
     return model, scaler
 
-# Prediksi AI Signal
-def predict_signal(model, scaler):
-    price, ma9, ma21, rsi, macd, signal_macd, upper_band, lower_band, atr = get_price_data()
-    X_input = pd.DataFrame([[ma9, ma21, rsi, macd, signal_macd, upper_band, lower_band, atr]],
-                           columns=["ma9", "ma21", "rsi", "macd", "signal_macd", "upper_band", "lower_band", "atr"])
-    X_scaled = scaler.transform(X_input)
+# Prediksi Harga dengan LSTM
+def predict_price(model, scaler):
+    ohlcv = binance.fetch_ohlcv(symbol, timeframe="15m", limit=50)
+    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["close"] = df["close"].astype(float)
 
-    prediction = model.predict(X_scaled)[0]
+    last_50_closes = df["close"].values.reshape(-1, 1)
+    scaled_data = scaler.transform(last_50_closes)
 
-    if prediction == 1:
-        print("🔹 Sinyal AI: BUY")
-        send_telegram_message("🤖 *AI Signal: BUY* 🚀")
-        place_order("BUY", price)
-    elif prediction == -1:
-        print("🔻 Sinyal AI: SELL")
-        send_telegram_message("🤖 *AI Signal: SELL* 📉")
-        place_order("SELL", price)
-    else:
-        print("⏸️ Sinyal AI: HOLD")
-        send_telegram_message("🤖 *AI Signal: HOLD* ⏳")
+    X_input = np.array([scaled_data])
+    X_input = np.reshape(X_input, (X_input.shape[0], X_input.shape[1], 1))
 
-# Mengambil data harga terbaru
-def get_price_data():
-    ohlcv = binance.fetch_ohlcv(symbol, timeframe="5m", limit=50)
-    close_prices = np.array([x[4] for x in ohlcv])
+    predicted_price = model.predict(X_input)
+    predicted_price = scaler.inverse_transform(predicted_price)
 
-    # Moving Averages
-    ma9 = np.mean(close_prices[-9:])
-    ma21 = np.mean(close_prices[-21:])
+    return predicted_price[0][0]
 
-    # MACD
-    ema12 = pd.Series(close_prices).ewm(span=12).mean().iloc[-1]
-    ema26 = pd.Series(close_prices).ewm(span=26).mean().iloc[-1]
-    macd = ema12 - ema26
-    signal_macd = pd.Series(macd).ewm(span=9).mean().iloc[-1]
-
-    # Bollinger Bands
-    sma20 = np.mean(close_prices[-20:])
-    stddev = np.std(close_prices[-20:])
-    upper_band = sma20 + (stddev * 2)
-    lower_band = sma20 - (stddev * 2)
-
-    # RSI (Relative Strength Index)
-    delta = np.diff(close_prices)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = np.mean(gain[-14:])
-    avg_loss = np.mean(loss[-14:])
-    rs = avg_gain / avg_loss if avg_loss != 0 else 0
-    rsi = 100 - (100 / (1 + rs))
-
-    # ATR (Average True Range)
-    atr = np.mean(np.abs(np.diff(close_prices)[-14:]))
-
-    return close_prices[-1], ma9, ma21, rsi, macd, signal_macd, upper_band, lower_band, atr
 # Jalankan bot
 def trading_bot():
-    print("🔄 Training AI Model...")
-    model, scaler = train_ml_model()
+    print("🔄 Training LSTM Model...")
+    model, scaler = train_lstm_model()
 
     while True:
         try:
-            predict_signal(model, scaler)
+            predicted_price = predict_price(model, scaler)
+            current_price = binance.fetch_ticker(symbol)["last"]
+
+            print(f"Predicted Price: {predicted_price:.2f}, Current Price: {current_price:.2f}")
+
+            if predicted_price > current_price:
+                print("🔹 AI Signal: BUY")
+                send_telegram_message("🤖 *AI Signal: BUY* 🚀")
+            elif predicted_price < current_price:
+                print("🔻 AI Signal: SELL")
+                send_telegram_message("🤖 *AI Signal: SELL* 📉")
+            else:
+                print("⏸️ AI Signal: HOLD")
+                send_telegram_message("🤖 *AI Signal: HOLD* ⏳")
+
             time.sleep(60)
         except Exception as e:
             send_telegram_message(f"⚠️ *Error:* {e}")
