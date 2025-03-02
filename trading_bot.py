@@ -9,12 +9,12 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
 
 # Konfigurasi API Binance
-api_key = "YOUR_BINANCE_API_KEY"
-api_secret = "YOUR_BINANCE_SECRET_KEY"
+api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
+api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
 
 # Konfigurasi API Telegram
-telegram_token = "YOUR_TELEGRAM_BOT_TOKEN"
-telegram_chat_id = "YOUR_TELEGRAM_CHAT_ID"
+telegram_token = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
+telegram_chat_id = "681125756"
 
 # Inisialisasi Binance
 binance = ccxt.binance({
