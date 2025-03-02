@@ -1,3 +1,4 @@
+import logging
 import ccxt
 import time
 import numpy as np
@@ -8,6 +9,9 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
+
+# Konfigurasi Logging
+logging.basicConfig(filename='trading_bot.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Konfigurasi API Binance
 api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
@@ -37,11 +41,12 @@ def send_telegram_message(message):
     try:
         requests.post(url, data=payload)
     except Exception as e:
-        print(f"Error mengirim pesan Telegram: {e}")
+        logging.error(f"Error mengirim pesan Telegram: {e}")
 
 # Fungsi Open Order
 def place_order(order_type):
     try:
+        logging.info(f"Mencoba untuk membuka order {order_type}")
         if order_type == "BUY":
             order = binance.create_market_buy_order(symbol, trade_amount / binance.fetch_ticker(symbol)["last"])
         else:
@@ -52,8 +57,10 @@ def place_order(order_type):
 
         send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
 
+        logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT")
         return entry_price
     except Exception as e:
+        logging.error(f"Order {order_type} gagal: {e}")
         send_telegram_message(f"⚠️ *Order Gagal:* {e}")
         return None
 
@@ -63,6 +70,8 @@ def check_tp_sl(entry_price):
         while True:
             ticker = binance.fetch_ticker(symbol)
             current_price = ticker['last']
+
+            logging.info(f"Memeriksa harga: {current_price} USDT")
 
             if current_price >= entry_price * (1 + tp_percentage):
                 place_order("SELL")
@@ -83,6 +92,7 @@ def trading_bot():
     while True:
         try:
             current_price = binance.fetch_ticker(symbol)["last"]
+            logging.info(f"Harga saat ini: {current_price} USDT")
 
             # Jika AI memberikan sinyal BUY
             entry_price = place_order("BUY")
@@ -91,6 +101,7 @@ def trading_bot():
 
             time.sleep(60)  # Cek sinyal setiap 1 menit
         except Exception as e:
+            logging.error(f"Error utama: {e}")
             send_telegram_message(f"⚠️ *Error:* {e}")
             time.sleep(10)
 
