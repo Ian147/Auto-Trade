@@ -215,8 +215,3 @@ def trading_bot():
             time.sleep(60)
         except Exception as e:
             logging.error(f"Error utama: {e}")
-            send_telegram_message(f"⚠️ *Error:* {e}")
-            time.sleep(10)
-
-# Eksekusi bot
-trading
