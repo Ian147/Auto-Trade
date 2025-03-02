@@ -98,7 +98,7 @@ def check_tp_sl(entry_price):
                     send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
                     break
 
-                time.sleep(3600)  # Cek harga setiap 1 jam (3600 detik)
+                time.sleep(60)  # Cek harga setiap 1 menit
             except Exception as e:
                 logging.error(f"Error saat memantau TP/SL: {e}")
                 send_telegram_message(f"⚠️ *Error saat memantau TP/SL:* {e}")
@@ -111,7 +111,7 @@ def check_tp_sl(entry_price):
 # Fungsi Melatih Model LSTM
 def train_lstm_model():
     try:
-        historical_data = binance.fetch_ohlcv(symbol, timeframe='1h', limit=1000)  # Menggunakan interval 1 jam
+        historical_data = binance.fetch_ohlcv(symbol, timeframe='1m', limit=1000)  # Menggunakan interval 1 menit
         df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
@@ -212,11 +212,4 @@ def trading_bot():
             else:
                 logging.info("Saldo tidak mencukupi untuk membuka posisi. Menunggu saldo tersedia...")
 
-            time.sleep(3600)  # Interval setiap 1 jam
-        except Exception as e:
-            logging.error(f"Error utama: {e}")
-            send_telegram_message(f"⚠️ *Error:* {e}")
-            time.sleep(10)
-
-# Eksekusi bot
-trading_bot()
+            time.sleep(60)  # Menunggu 1 menit
