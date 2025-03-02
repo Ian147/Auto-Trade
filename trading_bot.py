@@ -9,12 +9,12 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
 
 # Konfigurasi API Binance
-api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
-api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
+api_key = "YOUR_BINANCE_API_KEY"
+api_secret = "YOUR_BINANCE_SECRET_KEY"
 
 # Konfigurasi API Telegram
-telegram_token = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
-telegram_chat_id = "681125756"
+telegram_token = "YOUR_TELEGRAM_BOT_TOKEN"
+telegram_chat_id = "YOUR_TELEGRAM_CHAT_ID"
 
 # Inisialisasi Binance
 binance = ccxt.binance({
@@ -25,8 +25,9 @@ binance = ccxt.binance({
 
 # Pair yang diperdagangkan
 symbol = "BTC/USDT"
-min_balance = 10   # Minimal saldo USDT
 trade_amount = 5   # Order 5 USDT per transaksi
+tp_percentage = 1.5 / 100  # TP +1.5%
+sl_percentage = 1 / 100    # SL -1%
 
 # Fungsi Kirim Notifikasi ke Telegram
 def send_telegram_message(message):
@@ -92,6 +93,34 @@ def predict_price(model, scaler):
 
     return predicted_price[0][0]
 
+# Eksekusi Order
+def place_order(order_type, price):
+    if order_type == "BUY":
+        order = binance.create_market_buy_order(symbol, trade_amount / price)
+        entry_price = order['price']
+        send_telegram_message(f"📈 *BUY Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
+        return entry_price
+    elif order_type == "SELL":
+        order = binance.create_market_sell_order(symbol, trade_amount / price)
+        send_telegram_message(f"📉 *SELL Order Executed*\n- Harga: {order['price']} USDT")
+
+# Fungsi Cek TP dan SL
+def check_tp_sl(entry_price):
+    while True:
+        ticker = binance.fetch_ticker(symbol)
+        current_price = ticker['last']
+
+        if current_price >= entry_price * (1 + tp_percentage):
+            place_order("SELL", current_price)
+            send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price} USDT")
+            break
+        elif current_price <= entry_price * (1 - sl_percentage):
+            place_order("SELL", current_price)
+            send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price} USDT")
+            break
+
+        time.sleep(5)  # Cek harga setiap 5 detik
+
 # Jalankan bot
 def trading_bot():
     print("🔄 Training LSTM Model...")
@@ -105,13 +134,13 @@ def trading_bot():
             print(f"Predicted Price: {predicted_price:.2f}, Current Price: {current_price:.2f}")
 
             if predicted_price > current_price:
-                print("🔹 AI Signal: BUY")
                 send_telegram_message("🤖 *AI Signal: BUY* 🚀")
+                entry_price = place_order("BUY", current_price)
+                check_tp_sl(entry_price)
             elif predicted_price < current_price:
-                print("🔻 AI Signal: SELL")
                 send_telegram_message("🤖 *AI Signal: SELL* 📉")
+                place_order("SELL", current_price)
             else:
-                print("⏸️ AI Signal: HOLD")
                 send_telegram_message("🤖 *AI Signal: HOLD* ⏳")
 
             time.sleep(60)
