@@ -33,7 +33,7 @@ binance = ccxt.binance({
 symbol = "BTC/USDT"
 trade_amount = 10  # Order 10 USDT per transaksi
 tp_percentage = 60 / 100  # TP +60%
-sl_percentage = 50 / 100    # SL -50%
+sl_percentage = 50 / 100    # SL 50%
 
 # Fungsi Kirim Notifikasi ke Telegram
 def send_telegram_message(message):
@@ -59,20 +59,16 @@ def check_balance():
         send_telegram_message(f"⚠️ *Error saat mengecek saldo:* {e}")
         return 0
 
-# Fungsi Open Order (Menggunakan Limit Order)
+# Fungsi Open Order
 def place_order(order_type):
     try:
         logging.info(f"Mencoba untuk membuka order {order_type}")
         ticker = binance.fetch_ticker(symbol)
         price = ticker["last"]
-
-        # Tentukan harga limit (misalnya 0.1% lebih baik dari harga terakhir)
-        limit_price = price * 1.001 if order_type == "BUY" else price * 0.999
-
         if order_type == "BUY":
-            order = binance.create_limit_buy_order(symbol, trade_amount / price, limit_price)
+            order = binance.create_market_buy_order(symbol, trade_amount / price)
         else:
-            order = binance.create_limit_sell_order(symbol, trade_amount / price, limit_price)
+            order = binance.create_market_sell_order(symbol, trade_amount / price)
 
         entry_price = binance.fetch_my_trades(symbol)[-1]['price']
         send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
