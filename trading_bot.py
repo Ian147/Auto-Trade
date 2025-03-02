@@ -32,8 +32,8 @@ binance = ccxt.binance({
 # Pair yang diperdagangkan
 symbol = "BTC/USDT"
 trade_amount = 10  # Order 10 USDT per transaksi
-tp_percentage = 1.5 / 100  # TP +1.5%
-sl_percentage = 1 / 100    # SL -1%
+tp_percentage = 2 / 100  # TP +2%
+sl_percentage = 2 / 100    # SL -2%
 
 # Fungsi Kirim Notifikasi ke Telegram
 def send_telegram_message(message):
