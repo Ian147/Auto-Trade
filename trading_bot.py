@@ -10,7 +10,7 @@ from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
 import asyncio
 from telegram import Bot
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters
 
 # Konfigurasi API Binance
 API_KEY = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
