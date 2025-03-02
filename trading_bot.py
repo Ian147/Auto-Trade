@@ -15,7 +15,7 @@ logging.basicConfig(filename='trading_bot.log', level=logging.DEBUG, format='%(a
 
 # Konfigurasi API Binance
 api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
-api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
+api_secret = "YGpSiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
 
 # Konfigurasi API Telegram
 telegram_token = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
@@ -29,10 +29,18 @@ binance = ccxt.binance({
 })
 
 # Pair yang diperdagangkan
-symbol = "BTC/USDT"
-trade_amount = 10  # Order 10 USDT per transaksi
+symbol = "BTC/USDT"  # Masih menggunakan pair BTC/USDT, namun akan membeli dengan BTC
+trade_amount_in_btc = 0.001  # Order 0.001 BTC per transaksi
 tp_percentage = 1.5 / 100  # TP +1.5%
 sl_percentage = 1 / 100    # SL -1%
+
+# Fungsi untuk mendapatkan saldo spot
+def get_spot_balance():
+    balance = binance.fetch_balance()
+    spot_balance = balance['total']  # Total saldo di akun spot
+    btc_balance = spot_balance.get('BTC', 0)  # Ambil saldo BTC
+    usdt_balance = spot_balance.get('USDT', 0)  # Ambil saldo USDT
+    return btc_balance, usdt_balance
 
 # Fungsi Kirim Notifikasi ke Telegram
 def send_telegram_message(message):
@@ -48,14 +56,17 @@ def place_order(order_type):
     try:
         logging.info(f"Mencoba untuk membuka order {order_type}")
         if order_type == "BUY":
-            order = binance.create_market_buy_order(symbol, trade_amount / binance.fetch_ticker(symbol)["last"])
+            order = binance.create_market_buy_order(symbol, trade_amount_in_btc)
         else:
-            order = binance.create_market_sell_order(symbol, trade_amount / binance.fetch_ticker(symbol)["last"])
+            order = binance.create_market_sell_order(symbol, trade_amount_in_btc)
         
         # Ambil harga eksekusi order terakhir
         entry_price = binance.fetch_my_trades(symbol)[-1]['price']
+        
+        # Ambil saldo spot setelah order dieksekusi
+        btc_balance, usdt_balance = get_spot_balance()
 
-        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
+        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT\n\nSaldo Spot:\n- BTC: {btc_balance:.6f}\n- USDT: {usdt_balance:.2f}")
 
         logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT")
         return entry_price
@@ -75,11 +86,13 @@ def check_tp_sl(entry_price):
 
             if current_price >= entry_price * (1 + tp_percentage):
                 place_order("SELL")
-                send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
+                btc_balance, usdt_balance = get_spot_balance()
+                send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT\n\nSaldo Spot:\n- BTC: {btc_balance:.6f}\n- USDT: {usdt_balance:.2f}")
                 break
             elif current_price <= entry_price * (1 - sl_percentage):
                 place_order("SELL")
-                send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
+                btc_balance, usdt_balance = get_spot_balance()
+                send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT\n\nSaldo Spot:\n- BTC: {btc_balance:.6f}\n- USDT: {usdt_balance:.2f}")
                 break
 
             time.sleep(5)  # Cek harga setiap 5 detik
