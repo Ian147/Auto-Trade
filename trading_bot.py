@@ -1,8 +1,14 @@
 import logging
 import ccxt
 import time
+import numpy as np
 import requests
 import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 import threading
 
 # Konfigurasi Logging
@@ -37,6 +43,7 @@ def send_telegram_message(message):
         requests.post(url, data=payload, timeout=10)
     except requests.exceptions.RequestException as e:
         logging.error(f"Error mengirim pesan Telegram: {e}")
+        # Retry send message (recurse) after some time
         time.sleep(5)
         send_telegram_message(message)
 
@@ -52,36 +59,19 @@ def check_balance():
         send_telegram_message(f"⚠️ *Error saat mengecek saldo:* {e}")
         return 0
 
-# Fungsi Open Order dengan TP dan SL
+# Fungsi Open Order
 def place_order(order_type):
     try:
         logging.info(f"Mencoba untuk membuka order {order_type}")
         ticker = binance.fetch_ticker(symbol)
         price = ticker["last"]
-
-        # Menghitung harga TP dan SL
-        tp_price = price * (1 + tp_percentage)
-        sl_price = price * (1 - sl_percentage)
-
-        # Membuka order
         if order_type == "BUY":
             order = binance.create_market_buy_order(symbol, trade_amount / price)
         else:
             order = binance.create_market_sell_order(symbol, trade_amount / price)
 
         entry_price = binance.fetch_my_trades(symbol)[-1]['price']
-        
-        # Menggunakan OCO untuk TP dan SL
-        params = {
-            'stopPrice': sl_price,  # Stop Loss Price
-            'price': tp_price,  # Take Profit Price
-            'quantity': trade_amount / price
-        }
-        
-        # Pasang order OCO
-        binance.create_order(symbol, 'OCO', 'sell', trade_amount / price, price, params)
-
-        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {tp_price:.2f} USDT\n- SL: {sl_price:.2f} USDT")
+        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
         logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT")
         return entry_price
     except Exception as e:
