@@ -88,6 +88,7 @@ def check_tp_sl(entry_price):
                 current_price = ticker['last']
                 logging.info(f"Memeriksa harga: {current_price} USDT")
 
+                # Mengecek jika harga sudah mencapai TP atau SL
                 if current_price >= entry_price * (1 + tp_percentage):
                     place_order("SELL")
                     send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
@@ -97,13 +98,14 @@ def check_tp_sl(entry_price):
                     send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
                     break
 
-                time.sleep(5)
+                time.sleep(5)  # Cek harga setiap 5 detik
             except Exception as e:
                 logging.error(f"Error saat memantau TP/SL: {e}")
                 send_telegram_message(f"⚠️ *Error saat memantau TP/SL:* {e}")
                 break
 
     thread = threading.Thread(target=monitor_price)
+    thread.daemon = True  # Membuat thread berjalan di background
     thread.start()
 
 # Fungsi Melatih Model LSTM
