@@ -8,10 +8,11 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import threading
 
 # Konfigurasi Logging
-logging.basicConfig(filename='trading_bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(filename='trading_bot.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Konfigurasi API Binance
 api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
@@ -32,7 +33,7 @@ binance = ccxt.binance({
 symbol = "BTC/USDT"
 trade_amount = 10  # Order 10 USDT per transaksi
 tp_percentage = 5 / 100  # TP +5%
-sl_percentage = 5 / 100  # SL -5%
+sl_percentage = 5 / 100    # SL -5%
 
 # Fungsi Kirim Notifikasi ke Telegram
 def send_telegram_message(message):
@@ -40,39 +41,76 @@ def send_telegram_message(message):
     payload = {"chat_id": telegram_chat_id, "text": message, "parse_mode": "Markdown"}
     try:
         requests.post(url, data=payload, timeout=10)
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         logging.error(f"Error mengirim pesan Telegram: {e}")
+        # Retry send message (recurse) after some time
+        time.sleep(5)
+        send_telegram_message(message)
 
-# Fungsi Mengecek Saldo
+# Fungsi untuk Mengecek Saldo Spot
 def check_balance():
     try:
         balance = binance.fetch_balance()
-        spot_balance = balance['total'].get('USDT', 0)
+        spot_balance = balance['total']['USDT']
         logging.info(f"Saldo spot: {spot_balance} USDT")
         return spot_balance
     except Exception as e:
         logging.error(f"Error saat mengecek saldo: {e}")
+        send_telegram_message(f"⚠️ *Error saat mengecek saldo:* {e}")
         return 0
 
-# Fungsi Open Order dengan Limit Order
+# Fungsi Open Order (Menggunakan Limit Order)
 def place_order(order_type):
     try:
+        logging.info(f"Mencoba untuk membuka order {order_type}")
         ticker = binance.fetch_ticker(symbol)
         price = ticker["last"]
 
+        # Tentukan harga limit (misalnya 0.1% lebih baik dari harga terakhir)
         limit_price = price * 1.001 if order_type == "BUY" else price * 0.999
-        amount = trade_amount / price  # Konversi dari USDT ke BTC
 
         if order_type == "BUY":
-            order = binance.create_limit_buy_order(symbol, amount, limit_price)
+            order = binance.create_limit_buy_order(symbol, trade_amount / price, limit_price)
         else:
-            order = binance.create_limit_sell_order(symbol, amount, limit_price)
+            order = binance.create_limit_sell_order(symbol, trade_amount / price, limit_price)
 
-        send_telegram_message(f"📈 *{order_type} Order Placed*\n- Harga: {limit_price:.2f} USDT")
-        return limit_price
+        entry_price = binance.fetch_my_trades(symbol)[-1]['price']
+        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
+        logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT")
+        return entry_price
     except Exception as e:
         logging.error(f"Order {order_type} gagal: {e}")
+        send_telegram_message(f"⚠️ *Order Gagal:* {e}")
         return None
+
+# Fungsi Cek TP dan SL (Menggunakan Threading)
+def check_tp_sl(entry_price):
+    def monitor_price():
+        while True:
+            try:
+                ticker = binance.fetch_ticker(symbol)
+                current_price = ticker['last']
+                logging.info(f"Memeriksa harga: {current_price} USDT")
+
+                # Mengecek jika harga sudah mencapai TP atau SL
+                if current_price >= entry_price * (1 + tp_percentage):
+                    place_order("SELL")  # Menutup posisi untuk TP
+                    send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
+                    break
+                elif current_price <= entry_price * (1 - sl_percentage):
+                    place_order("SELL")  # Menutup posisi untuk SL
+                    send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
+                    break
+
+                time.sleep(5)  # Cek harga setiap 5 detik
+            except Exception as e:
+                logging.error(f"Error saat memantau TP/SL: {e}")
+                send_telegram_message(f"⚠️ *Error saat memantau TP/SL:* {e}")
+                break
+
+    thread = threading.Thread(target=monitor_price)
+    thread.daemon = True  # Membuat thread berjalan di background
+    thread.start()
 
 # Fungsi Melatih Model LSTM
 def train_lstm_model():
@@ -111,29 +149,32 @@ def train_lstm_model():
         model.compile(optimizer='adam', loss='mean_squared_error')
 
         epoch = 0
+        target_accuracy = 0.90
         best_mae = float('inf')
 
-        while epoch < 10:  # Batasi jumlah epoch untuk efisiensi
+        while True:
             epoch += 1
             model.fit(X_train, y_train, epochs=1, batch_size=32, verbose=0)
             y_pred = model.predict(X_test)
-            mae = mean_absolute_error(y_test, y_pred)
 
+            mae = mean_absolute_error(y_test, y_pred)
             logging.info(f"Epoch {epoch} - MAE: {mae}")
 
             if mae < best_mae:
                 best_mae = mae
             
             if mae < 0.1:
-                logging.info(f"Model sudah cukup akurat! MAE: {mae}")
+                logging.info(f"Model mencapai akurasi yang diinginkan dengan MAE: {mae}. Model siap untuk dijalankan!")
+                send_telegram_message(f"📊 *Model Akurasi*: {mae:.4f}")
                 break
 
         return model, scaler
     except Exception as e:
         logging.error(f"Error saat melatih model LSTM: {e}")
+        send_telegram_message(f"⚠️ *Error saat melatih model LSTM:* {e}")
         return None, None
 
-# Fungsi Prediksi Harga
+# Fungsi Prediksi Harga Menggunakan Model LSTM
 def predict_price(model, scaler):
     try:
         latest_data = binance.fetch_ohlcv(symbol, timeframe='1m', limit=60)
@@ -148,14 +189,12 @@ def predict_price(model, scaler):
         return predicted_price[0][0]
     except Exception as e:
         logging.error(f"Error saat memprediksi harga: {e}")
+        send_telegram_message(f"⚠️ *Error saat memprediksi harga:* {e}")
         return 0
 
-# Fungsi Menjalankan Bot Trading
+# Fungsi untuk menjalankan bot trading
 def trading_bot():
     model, scaler = train_lstm_model()
-    if model is None or scaler is None:
-        logging.error("Model gagal dilatih, bot berhenti.")
-        return
 
     while True:
         try:
@@ -163,16 +202,24 @@ def trading_bot():
 
             if spot_balance >= trade_amount:
                 current_price = binance.fetch_ticker(symbol)["last"]
-                predicted_price = predict_price(model, scaler)
+                logging.info(f"Harga saat ini: {current_price} USDT")
 
-                send_telegram_message(f"🔮 *Prediksi Harga*: {predicted_price:.2f} USDT")
+                predicted_price = predict_price(model, scaler)
+                logging.info(f"Harga yang diprediksi: {predicted_price} USDT")
+
+                send_telegram_message(f"🔮 *Akurasi Sinyal* : {predicted_price:.2f} USDT")
 
                 if predicted_price > current_price * 1.01:
-                    place_order("BUY")
+                    entry_price = place_order("BUY")
+                    if entry_price:
+                        check_tp_sl(entry_price)
+            else:
+                logging.info("Saldo tidak mencukupi untuk membuka posisi. Menunggu saldo tersedia...")
 
-            time.sleep(60)  # Tunggu 1 menit sebelum cek ulang
+            time.sleep(60)
         except Exception as e:
             logging.error(f"Error utama: {e}")
+            send_telegram_message(f"⚠️ *Error:* {e}")
             time.sleep(10)
 
 # Eksekusi bot
