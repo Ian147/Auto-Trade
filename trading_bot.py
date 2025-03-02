@@ -125,6 +125,7 @@ def get_price_data():
     ohlcv = binance.fetch_ohlcv(symbol, timeframe="5m", limit=50)
     close_prices = np.array([x[4] for x in ohlcv])
 
+    # Moving Averages
     ma9 = np.mean(close_prices[-9:])
     ma21 = np.mean(close_prices[-21:])
 
@@ -140,11 +141,19 @@ def get_price_data():
     upper_band = sma20 + (stddev * 2)
     lower_band = sma20 - (stddev * 2)
 
-    # ATR
+    # RSI (Relative Strength Index)
+    delta = np.diff(close_prices)
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = np.mean(gain[-14:])
+    avg_loss = np.mean(loss[-14:])
+    rs = avg_gain / avg_loss if avg_loss != 0 else 0
+    rsi = 100 - (100 / (1 + rs))
+
+    # ATR (Average True Range)
     atr = np.mean(np.abs(np.diff(close_prices)[-14:]))
 
     return close_prices[-1], ma9, ma21, rsi, macd, signal_macd, upper_band, lower_band, atr
-
 # Jalankan bot
 def trading_bot():
     print("🔄 Training AI Model...")
