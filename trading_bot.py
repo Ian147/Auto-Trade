@@ -1,14 +1,15 @@
 import logging
 import ccxt
 import time
+import numpy as np
 import requests
 import pandas as pd
-import threading
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
-import numpy as np
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import threading
 
 # Konfigurasi Logging
 logging.basicConfig(filename='trading_bot.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,7 +31,7 @@ binance = ccxt.binance({
 
 # Pair yang diperdagangkan
 symbol = "BTC/USDT"
-trade_amount = 10 # Order 10 USDT per transaksi
+trade_amount = 10  # Order 10 USDT per transaksi
 tp_percentage = 1.5 / 100  # TP +1.5%
 sl_percentage = 1 / 100    # SL -1%
 
@@ -42,35 +43,6 @@ def send_telegram_message(message):
         requests.post(url, data=payload)
     except Exception as e:
         logging.error(f"Error mengirim pesan Telegram: {e}")
-
-# Fungsi untuk menghitung akurasi sinyal
-def calculate_accuracy(entry_price, predicted_direction):
-    """
-    Fungsi ini menghitung akurasi berdasarkan apakah harga bergerak sesuai dengan prediksi sinyal.
-    """
-    current_price = binance.fetch_ticker(symbol)["last"]
-    
-    # Jika prediksi "BUY" dan harga naik, maka sinyal benar (akurasi 100%)
-    if predicted_direction == "BUY" and current_price > entry_price:
-        accuracy = 100
-    # Jika prediksi "SELL" dan harga turun, maka sinyal benar (akurasi 100%)
-    elif predicted_direction == "SELL" and current_price < entry_price:
-        accuracy = 100
-    else:
-        accuracy = 0  # Prediksi salah
-
-    return accuracy
-
-# Fungsi untuk mengambil saldo spot
-def get_spot_balance():
-    try:
-        balance = binance.fetch_balance()
-        usdt_balance = balance['total'].get('USDT', 0)  # Ambil saldo USDT di spot
-        btc_balance = balance['total'].get('BTC', 0)    # Ambil saldo BTC di spot
-        return usdt_balance, btc_balance
-    except Exception as e:
-        logging.error(f"Error mengambil saldo spot: {e}")
-        return 0, 0
 
 # Fungsi Open Order
 def place_order(order_type):
@@ -84,22 +56,14 @@ def place_order(order_type):
         # Ambil harga eksekusi order terakhir
         entry_price = binance.fetch_my_trades(symbol)[-1]['price']
 
-        # Mengambil saldo spot
-        usdt_balance, btc_balance = get_spot_balance()
+        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
 
-        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT\n"
-                              f"💰 *Saldo Spot:* {usdt_balance:.2f} USDT, {btc_balance:.6f} BTC")
-
-        # Menghitung akurasi sinyal
-        accuracy = calculate_accuracy(entry_price, order_type)
-        send_telegram_message(f"🔍 *Akurasi Sinyal:* {accuracy}%")
-        
-        logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT dengan akurasi sinyal {accuracy}%")
-        return entry_price, accuracy
+        logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT")
+        return entry_price
     except Exception as e:
         logging.error(f"Order {order_type} gagal: {e}")
         send_telegram_message(f"⚠️ *Order Gagal:* {e}")
-        return None, 0
+        return None
 
 # Fungsi Cek TP dan SL (Menggunakan Threading)
 def check_tp_sl(entry_price):
@@ -124,17 +88,113 @@ def check_tp_sl(entry_price):
     thread = threading.Thread(target=monitor_price)
     thread.start()
 
-# Jalankan bot
+# Fungsi Melatih Model LSTM
+def train_lstm_model():
+    # Mengambil data historis dari Binance
+    historical_data = binance.fetch_ohlcv(symbol, timeframe='1h', limit=1000)
+    df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+
+    # Memilih hanya harga penutupan untuk pelatihan
+    close_prices = df['close'].values.reshape(-1, 1)
+
+    # Normalisasi harga
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(close_prices)
+
+    # Membagi data untuk pelatihan dan pengujian
+    train_size = int(len(scaled_data) * 0.8)
+    train_data, test_data = scaled_data[:train_size], scaled_data[train_size:]
+
+    # Membuat dataset untuk pelatihan
+    def create_dataset(data, time_step=60):
+        X, y = [], []
+        for i in range(time_step, len(data)):
+            X.append(data[i-time_step:i, 0])
+            y.append(data[i, 0])
+        return np.array(X), np.array(y)
+
+    X_train, y_train = create_dataset(train_data)
+    X_test, y_test = create_dataset(test_data)
+
+    # Reshape data untuk LSTM
+    X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
+    X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
+
+    # Membuat model LSTM
+    model = Sequential()
+    model.add(LSTM(units=50, return_sequences=True, input_shape=(X_train.shape[1], 1)))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=50, return_sequences=False))
+    model.add(Dropout(0.2))
+    model.add(Dense(units=1))
+
+    model.compile(optimizer='adam', loss='mean_squared_error')
+
+    # Melatih model hingga akurasi 90%
+    epoch = 0
+    target_accuracy = 0.90  # Target akurasi 90%
+    best_mae = float('inf')  # Variabel untuk menyimpan MAE terbaik
+
+    while True:
+        epoch += 1
+        model.fit(X_train, y_train, epochs=1, batch_size=32, verbose=0)
+        
+        # Prediksi harga menggunakan data uji
+        y_pred = model.predict(X_test)
+
+        # Menghitung MAE
+        mae = mean_absolute_error(y_test, y_pred)
+        logging.info(f"Epoch {epoch} - MAE: {mae}")
+
+        # Cek jika MAE cukup rendah (akurasi cukup tinggi)
+        if mae < best_mae:
+            best_mae = mae
+        
+        # Jika MAE menunjukkan akurasi di atas 90%, berhenti melatih
+        if mae < 0.1:  # Misalnya, MAE yang rendah menunjukkan akurasi tinggi
+            logging.info(f"Model mencapai akurasi yang diinginkan dengan MAE: {mae}. Model siap untuk dijalankan!")
+            break
+
+    return model, scaler
+
+# Fungsi Prediksi Harga Menggunakan Model LSTM
+def predict_price(model, scaler):
+    latest_data = binance.fetch_ohlcv(symbol, timeframe='1m', limit=60)
+    df = pd.DataFrame(latest_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    close_prices = df['close'].values.reshape(-1, 1)
+
+    # Normalisasi data
+    scaled_data = scaler.transform(close_prices)
+
+    # Persiapkan data untuk prediksi
+    X_input = scaled_data[-60:].reshape(1, 60, 1)
+
+    # Prediksi harga
+    predicted_price = model.predict(X_input)
+
+    # Mengembalikan harga yang diprediksi dalam bentuk yang dapat dimengerti
+    predicted_price = scaler.inverse_transform(predicted_price)
+    return predicted_price[0][0]
+
+# Fungsi untuk menjalankan bot trading
 def trading_bot():
+    model, scaler = train_lstm_model()  # Melatih model sebelum memulai trading
+
     while True:
         try:
             current_price = binance.fetch_ticker(symbol)["last"]
             logging.info(f"Harga saat ini: {current_price} USDT")
 
-            # Jika AI memberikan sinyal BUY
-            entry_price, accuracy = place_order("BUY")
-            if entry_price:
-                check_tp_sl(entry_price)
+            # Prediksi harga menggunakan LSTM
+            predicted_price = predict_price(model, scaler)
+            logging.info(f"Harga yang diprediksi: {predicted_price} USDT")
+
+            # Evaluasi sinyal (misalnya, sinyal beli jika prediksi harga lebih tinggi)
+            if predicted_price > current_price * 1.01:  # Harga diprediksi naik
+                entry_price = place_order("BUY")
+                if entry_price:
+                    check_tp_sl(entry_price)
 
             time.sleep(60)  # Cek sinyal setiap 1 menit
         except Exception as e:
