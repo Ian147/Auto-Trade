@@ -3,6 +3,7 @@ import time
 import numpy as np
 import requests
 import pandas as pd
+import threading
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -25,7 +26,7 @@ binance = ccxt.binance({
 
 # Pair yang diperdagangkan
 symbol = "BTC/USDT"
-trade_amount = 10  # Order 5 USDT per transaksi
+trade_amount = 10  # Order 10 USDT per transaksi
 tp_percentage = 1.5 / 100  # TP +1.5%
 sl_percentage = 1 / 100    # SL -1%
 
@@ -38,112 +39,57 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Error mengirim pesan Telegram: {e}")
 
-# Mengambil data harga untuk LSTM
-def get_training_data():
-    ohlcv = binance.fetch_ohlcv(symbol, timeframe="15m", limit=500)
-    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    df["close"] = df["close"].astype(float)
+# Fungsi Open Order
+def place_order(order_type):
+    try:
+        if order_type == "BUY":
+            order = binance.create_market_buy_order(symbol, trade_amount / binance.fetch_ticker(symbol)["last"])
+        else:
+            order = binance.create_market_sell_order(symbol, trade_amount / binance.fetch_ticker(symbol)["last"])
+        
+        # Ambil harga eksekusi order terakhir
+        entry_price = binance.fetch_my_trades(symbol)[-1]['price']
 
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(df["close"].values.reshape(-1, 1))
+        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
 
-    sequence_length = 50
-    X, y = [], []
-    for i in range(sequence_length, len(scaled_data)):
-        X.append(scaled_data[i-sequence_length:i, 0])
-        y.append(scaled_data[i, 0])
-
-    X, y = np.array(X), np.array(y)
-    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
-
-    return X, y, scaler
-
-# Training Model LSTM
-def train_lstm_model():
-    X, y, scaler = get_training_data()
-
-    model = Sequential([
-        LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)),
-        Dropout(0.2),
-        LSTM(units=50, return_sequences=False),
-        Dropout(0.2),
-        Dense(units=25),
-        Dense(units=1)
-    ])
-
-    model.compile(optimizer="adam", loss="mean_squared_error")
-    model.fit(X, y, epochs=20, batch_size=32, verbose=1)
-
-    return model, scaler
-
-# Prediksi Harga dengan LSTM
-def predict_price(model, scaler):
-    ohlcv = binance.fetch_ohlcv(symbol, timeframe="15m", limit=50)
-    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    df["close"] = df["close"].astype(float)
-
-    last_50_closes = df["close"].values.reshape(-1, 1)
-    scaled_data = scaler.transform(last_50_closes)
-
-    X_input = np.array([scaled_data])
-    X_input = np.reshape(X_input, (X_input.shape[0], X_input.shape[1], 1))
-
-    predicted_price = model.predict(X_input)
-    predicted_price = scaler.inverse_transform(predicted_price)
-
-    return predicted_price[0][0]
-
-# Eksekusi Order
-def place_order(order_type, price):
-    if order_type == "BUY":
-        order = binance.create_market_buy_order(symbol, trade_amount / price)
-        entry_price = order['price']
-        send_telegram_message(f"📈 *BUY Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
         return entry_price
-    elif order_type == "SELL":
-        order = binance.create_market_sell_order(symbol, trade_amount / price)
-        send_telegram_message(f"📉 *SELL Order Executed*\n- Harga: {order['price']} USDT")
+    except Exception as e:
+        send_telegram_message(f"⚠️ *Order Gagal:* {e}")
+        return None
 
-# Fungsi Cek TP dan SL
+# Fungsi Cek TP dan SL (Menggunakan Threading)
 def check_tp_sl(entry_price):
-    while True:
-        ticker = binance.fetch_ticker(symbol)
-        current_price = ticker['last']
+    def monitor_price():
+        while True:
+            ticker = binance.fetch_ticker(symbol)
+            current_price = ticker['last']
 
-        if current_price >= entry_price * (1 + tp_percentage):
-            place_order("SELL", current_price)
-            send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price} USDT")
-            break
-        elif current_price <= entry_price * (1 - sl_percentage):
-            place_order("SELL", current_price)
-            send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price} USDT")
-            break
+            if current_price >= entry_price * (1 + tp_percentage):
+                place_order("SELL")
+                send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
+                break
+            elif current_price <= entry_price * (1 - sl_percentage):
+                place_order("SELL")
+                send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
+                break
 
-        time.sleep(5)  # Cek harga setiap 5 detik
+            time.sleep(5)  # Cek harga setiap 5 detik
+
+    thread = threading.Thread(target=monitor_price)
+    thread.start()
 
 # Jalankan bot
 def trading_bot():
-    print("🔄 Training LSTM Model...")
-    model, scaler = train_lstm_model()
-
     while True:
         try:
-            predicted_price = predict_price(model, scaler)
             current_price = binance.fetch_ticker(symbol)["last"]
 
-            print(f"Predicted Price: {predicted_price:.2f}, Current Price: {current_price:.2f}")
-
-            if predicted_price > current_price:
-                send_telegram_message("🤖 *AI Signal: BUY* 🚀")
-                entry_price = place_order("BUY", current_price)
+            # Jika AI memberikan sinyal BUY
+            entry_price = place_order("BUY")
+            if entry_price:
                 check_tp_sl(entry_price)
-            elif predicted_price < current_price:
-                send_telegram_message("🤖 *AI Signal: SELL* 📉")
-                place_order("SELL", current_price)
-            else:
-                send_telegram_message("🤖 *AI Signal: HOLD* ⏳")
 
-            time.sleep(60)
+            time.sleep(60)  # Cek sinyal setiap 1 menit
         except Exception as e:
             send_telegram_message(f"⚠️ *Error:* {e}")
             time.sleep(10)
