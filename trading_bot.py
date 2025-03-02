@@ -1,14 +1,8 @@
 import logging
 import ccxt
 import time
-import numpy as np
 import requests
 import pandas as pd
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 import threading
 
 # Konfigurasi Logging
@@ -84,6 +78,7 @@ def place_order(order_type):
             'quantity': trade_amount / price
         }
         
+        # Pasang order OCO
         binance.create_order(symbol, 'OCO', 'sell', trade_amount / price, price, params)
 
         send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {tp_price:.2f} USDT\n- SL: {sl_price:.2f} USDT")
