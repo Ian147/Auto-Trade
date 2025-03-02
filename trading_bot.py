@@ -25,7 +25,7 @@ binance = ccxt.binance({
 
 # Pair yang diperdagangkan
 symbol = "BTC/USDT"
-trade_amount = 5   # Order 5 USDT per transaksi
+trade_amount = 10  # Order 5 USDT per transaksi
 tp_percentage = 1.5 / 100  # TP +1.5%
 sl_percentage = 1 / 100    # SL -1%
 
