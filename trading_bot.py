@@ -2,6 +2,10 @@ import ccxt
 import time
 import numpy as np
 import requests
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 
 # Konfigurasi API Binance
 api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
@@ -36,16 +40,77 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Error mengirim pesan Telegram: {e}")
 
-# Mengambil data harga, MA, RSI, dan Bollinger Bands
+# Mengambil data harga & indikator untuk Machine Learning
+def get_training_data():
+    ohlcv = binance.fetch_ohlcv(symbol, timeframe="5m", limit=100)
+    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+    df["ma9"] = df["close"].rolling(window=9).mean()
+    df["ma21"] = df["close"].rolling(window=21).mean()
+
+    # RSI Calculation
+    delta = df["close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df["rsi"] = 100 - (100 / (1 + rs))
+
+    # Label: BUY (1) jika MA9 > MA21 dan RSI < 35, SELL (-1) jika MA9 < MA21 dan RSI > 70, else HOLD (0)
+    df["signal"] = 0
+    df.loc[(df["ma9"] > df["ma21"]) & (df["rsi"] < 35), "signal"] = 1
+    df.loc[(df["ma9"] < df["ma21"]) & (df["rsi"] > 70), "signal"] = -1
+
+    df.dropna(inplace=True)  # Hapus data yang memiliki nilai NaN
+
+    return df
+
+# Training Model Machine Learning
+def train_ml_model():
+    df = get_training_data()
+    X = df[["ma9", "ma21", "rsi"]]
+    y = df["signal"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train_scaled, y_train)
+
+    accuracy = model.score(X_test_scaled, y_test)
+    print(f"🎯 Model Accuracy: {accuracy:.2f}")
+
+    return model, scaler
+
+# Prediksi AI Signal
+def predict_signal(model, scaler):
+    price, ma9, ma21, rsi = get_price_data()
+    X_input = np.array([[ma9, ma21, rsi]])
+    X_scaled = scaler.transform(X_input)
+
+    prediction = model.predict(X_scaled)[0]
+
+    if prediction == 1:
+        print("🔹 Sinyal AI: BUY")
+        send_telegram_message("🤖 *AI Signal: BUY*")
+        place_order("BUY", price)
+    elif prediction == -1:
+        print("🔻 Sinyal AI: SELL")
+        send_telegram_message("🤖 *AI Signal: SELL*")
+        place_order("SELL", price)
+    else:
+        print("⏸️ Sinyal AI: HOLD")
+
+# Mengambil data harga terbaru
 def get_price_data():
     ohlcv = binance.fetch_ohlcv(symbol, timeframe="5m", limit=50)
     close_prices = np.array([x[4] for x in ohlcv])
-    
-    # Moving Averages
+
     ma9 = np.mean(close_prices[-9:])
     ma21 = np.mean(close_prices[-21:])
 
-    # RSI Calculation
     delta = np.diff(close_prices)
     gain = np.where(delta > 0, delta, 0)
     loss = np.where(delta < 0, -delta, 0)
@@ -59,94 +124,49 @@ def get_price_data():
 # Mengecek saldo USDT
 def check_balance():
     balance = binance.fetch_balance()
-    usdt_balance = balance['total'].get('USDT', 0)
-    return usdt_balance
+    return balance['total'].get('USDT', 0)
 
 # Mengecek saldo BTC yang sedang di-hold
 def check_btc_balance():
     balance = binance.fetch_balance()
-    btc_balance = balance['total'].get('BTC', 0)
-    return btc_balance
+    return balance['total'].get('BTC', 0)
 
-# Melakukan order BUY atau SELL dan mengirim notifikasi Telegram
+# Melakukan order BUY atau SELL
 def place_order(signal, price):
     global last_buy_price
     usdt_balance = check_balance()
 
     if usdt_balance < min_balance:
-        print("Saldo tidak cukup untuk trading.")
         send_telegram_message("⚠️ *Saldo tidak cukup untuk trading!*")
         return
 
-    order_amount = trade_amount / price  # Open posisi dengan 5 USDT
+    order_amount = trade_amount / price
 
     if signal == "BUY":
-        print(f"Placing BUY order for {order_amount:.6f} BTC at {price:.2f} USDT")
-        send_telegram_message(f"📈 *BUY Order Executed*\n🔹 *Amount:* {order_amount:.6f} BTC\n🔹 *Price:* {price:.2f} USDT")
+        send_telegram_message(f"📈 *BUY Order Executed*\n🔹 *Price:* {price:.2f} USDT")
         binance.create_market_buy_order(symbol, order_amount)
-        last_buy_price = price  # Simpan harga beli
+        last_buy_price = price
 
     elif signal == "SELL":
         btc_balance = check_btc_balance()
         if btc_balance > 0:
-            print(f"Placing SELL order for {btc_balance:.6f} BTC at {price:.2f} USDT")
-            send_telegram_message(f"📉 *SELL Order Executed*\n🔹 *Amount:* {btc_balance:.6f} BTC\n🔹 *Price:* {price:.2f} USDT")
+            send_telegram_message(f"📉 *SELL Order Executed*\n🔹 *Price:* {price:.2f} USDT")
             binance.create_market_sell_order(symbol, btc_balance)
-            last_buy_price = None  # Reset harga beli setelah jual
-        else:
-            print("Tidak ada BTC untuk dijual.")
+            last_buy_price = None
 
 # Fungsi utama bot
 def trading_bot():
     global last_buy_price
-    last_notification_time = 0
+    print("🔄 Training AI Model...")
+    model, scaler = train_ml_model()
 
     while True:
         try:
-            price, ma9, ma21, rsi = get_price_data()
-            print(f"Harga: {price:.2f} USDT, MA9: {ma9:.2f}, MA21: {ma21:.2f}, RSI: {rsi:.2f}")
-
-            # **BUY SIGNAL**
-            if ma9 > ma21 and rsi < 35:
-                print("Sinyal: STRONG BUY")
-                send_telegram_message("🟢 *STRONG BUY Signal*")
-                place_order("BUY", price)
-
-            # **SELL SIGNAL**
-            elif ma9 < ma21 and rsi > 70:
-                print("Sinyal: STRONG SELL")
-                send_telegram_message("🔴 *STRONG SELL Signal*")
-                place_order("SELL", price)
-
-            # **Cek TP & SL**
-            if last_buy_price:
-                take_profit = last_buy_price * (1 + take_profit_pct)
-                stop_loss = last_buy_price * (1 - stop_loss_pct)
-
-                if price >= take_profit:
-                    print(f"🔥 Take Profit tercapai di {price:.2f} USDT!")
-                    send_telegram_message(f"✅ *Take Profit Tercapai!*\n🔹 *Jual di:* {price:.2f} USDT")
-                    place_order("SELL", price)
-
-                elif price <= stop_loss:
-                    print(f"⚠️ Stop Loss tercapai di {price:.2f} USDT!")
-                    send_telegram_message(f"❌ *Stop Loss Tercapai!*\n🔹 *Jual di:* {price:.2f} USDT")
-                    place_order("SELL", price)
-
-            # **Notifikasi Setiap 10 Menit**
-            current_time = time.time()
-            if current_time - last_notification_time >= 600:  # 600 detik = 10 menit
-                usdt_balance = check_balance()
-                btc_balance = check_btc_balance()
-                send_telegram_message(f"💰 *Saldo USDT:* {usdt_balance:.2f}\n🔹 *BTC dalam Open Posisi:* {btc_balance:.6f}")
-                last_notification_time = current_time
-
-            time.sleep(60)  # Tunggu 1 menit sebelum iterasi berikutnya
-
+            predict_signal(model, scaler)
+            time.sleep(60)
         except Exception as e:
-            print(f"Error: {e}")
             send_telegram_message(f"⚠️ *Error:* {e}")
-            time.sleep(10)  # Jika error, tunggu 10 detik sebelum mencoba lagi
+            time.sleep(10)
 
 # Jalankan bot
 trading_bot()
