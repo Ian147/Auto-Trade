@@ -59,7 +59,7 @@ def check_balance():
         send_telegram_message(f"⚠️ *Error saat mengecek saldo:* {e}")
         return 0
 
-# Fungsi Open Order (Menggunakan Limit Order)
+# Fungsi Open Order (Dengan OCO untuk TP dan SL)
 def place_order(order_type):
     try:
         logging.info(f"Mencoba untuk membuka order {order_type}")
@@ -69,48 +69,35 @@ def place_order(order_type):
         # Tentukan harga limit (misalnya 0.1% lebih baik dari harga terakhir)
         limit_price = price * 1.001 if order_type == "BUY" else price * 0.999
 
+        # Tentukan harga TP dan SL
+        tp_price = limit_price * (1 + tp_percentage) if order_type == "BUY" else limit_price * (1 - tp_percentage)
+        sl_price = limit_price * (1 - sl_percentage) if order_type == "BUY" else limit_price * (1 + sl_percentage)
+
         if order_type == "BUY":
+            # Buat limit buy order
             order = binance.create_limit_buy_order(symbol, trade_amount / price, limit_price)
+            # Buat OCO order untuk TP dan SL
+            oco_order = binance.create_order(symbol, 'limit', 'sell', trade_amount / price, tp_price, {
+                'stopPrice': sl_price,
+                'price': sl_price
+            })
         else:
+            # Buat limit sell order
             order = binance.create_limit_sell_order(symbol, trade_amount / price, limit_price)
+            # Buat OCO order untuk TP dan SL
+            oco_order = binance.create_order(symbol, 'limit', 'buy', trade_amount / price, tp_price, {
+                'stopPrice': sl_price,
+                'price': sl_price
+            })
 
         entry_price = binance.fetch_my_trades(symbol)[-1]['price']
-        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
+        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {tp_price:.2f} USDT\n- SL: {sl_price:.2f} USDT")
         logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT")
         return entry_price
     except Exception as e:
         logging.error(f"Order {order_type} gagal: {e}")
         send_telegram_message(f"⚠️ *Order Gagal:* {e}")
         return None
-
-# Fungsi Cek TP dan SL (Menggunakan Threading)
-def check_tp_sl(entry_price):
-    def monitor_price():
-        while True:
-            try:
-                ticker = binance.fetch_ticker(symbol)
-                current_price = ticker['last']
-                logging.info(f"Memeriksa harga: {current_price} USDT")
-
-                # Mengecek jika harga sudah mencapai TP atau SL
-                if current_price >= entry_price * (1 + tp_percentage):
-                    place_order("SELL")  # Menutup posisi untuk TP
-                    send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
-                    break
-                elif current_price <= entry_price * (1 - sl_percentage):
-                    place_order("SELL")  # Menutup posisi untuk SL
-                    send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
-                    break
-
-                time.sleep(5)  # Cek harga setiap 5 detik
-            except Exception as e:
-                logging.error(f"Error saat memantau TP/SL: {e}")
-                send_telegram_message(f"⚠️ *Error saat memantau TP/SL:* {e}")
-                break
-
-    thread = threading.Thread(target=monitor_price)
-    thread.daemon = True  # Membuat thread berjalan di background
-    thread.start()
 
 # Fungsi Melatih Model LSTM
 def train_lstm_model():
