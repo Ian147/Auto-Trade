@@ -49,8 +49,11 @@ def check_balance():
     balance = binance.fetch_balance()
     spot_balance = balance['total']['USDT']
     logging.info(f"Saldo spot: {spot_balance} USDT")
-    send_telegram_message(f"💰 *Saldo Spot* : {spot_balance} USDT")  # Kirim saldo spot ke Telegram
     return spot_balance
+
+# Fungsi untuk mengirim saldo spot ke Telegram
+def send_balance_to_telegram(spot_balance):
+    send_telegram_message(f"💰 *Saldo Spot* : {spot_balance} USDT")
 
 # Fungsi Open Order
 def place_order(order_type):
@@ -65,8 +68,12 @@ def place_order(order_type):
         entry_price = binance.fetch_my_trades(symbol)[-1]['price']
 
         send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
-
         logging.info(f"Order {order_type} berhasil dieksekusi pada harga {entry_price} USDT")
+
+        # Kirim saldo spot saat OP
+        spot_balance = check_balance()
+        send_balance_to_telegram(spot_balance)
+        
         return entry_price
     except Exception as e:
         logging.error(f"Order {order_type} gagal: {e}")
@@ -85,10 +92,18 @@ def check_tp_sl(entry_price):
             if current_price >= entry_price * (1 + tp_percentage):
                 place_order("SELL")
                 send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
+                
+                # Kirim saldo spot saat TP tercapai
+                spot_balance = check_balance()
+                send_balance_to_telegram(spot_balance)
                 break
             elif current_price <= entry_price * (1 - sl_percentage):
                 place_order("SELL")
                 send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
+                
+                # Kirim saldo spot saat SL tercapai
+                spot_balance = check_balance()
+                send_balance_to_telegram(spot_balance)
                 break
 
             time.sleep(5)  # Cek harga setiap 5 detik
