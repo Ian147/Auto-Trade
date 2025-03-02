@@ -4,12 +4,12 @@ import numpy as np
 import requests
 
 # Konfigurasi API Binance
-api_key = "MASUKKAN_API_KEY_BINANCE"
-api_secret = "MASUKKAN_SECRET_KEY_BINANCE"
+api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
+api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
 
 # Konfigurasi API Telegram
-telegram_token = "MASUKKAN_TOKEN_BOT_TELEGRAM"
-telegram_chat_id = "MASUKKAN_CHAT_ID_TELEGRAM"
+telegram_token = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
+telegram_chat_id = "681125756"
 
 # Inisialisasi Binance
 binance = ccxt.binance({
