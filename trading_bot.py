@@ -11,9 +11,6 @@ from sklearn.preprocessing import MinMaxScaler
 import xgboost as xgb
 import threading
 
-# Konfigurasi Logging
-logging.basicConfig(filename='trading_bot.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-
 # Konfigurasi API Binance
 api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
 api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
@@ -35,6 +32,10 @@ trade_amount = 10  # Order 10 USDT per transaksi
 tp_percentage = 2 / 100  # TP +2%
 sl_percentage = 1 / 100  # SL -1%
 
+# Variabel Global
+entry_price = None  # Harga beli terakhir
+last_trade_time = 0  # Waktu terakhir melakukan transaksi
+
 # Fungsi Kirim Notifikasi ke Telegram
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
@@ -44,80 +45,46 @@ def send_telegram_message(message):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error mengirim pesan Telegram: {e}")
 
-# Fungsi Mengecek Saldo
-def check_balance(asset):
-    try:
-        balance = binance.fetch_balance()
-        return balance['total'].get(asset, 0)
-    except Exception as e:
-        logging.error(f"Error mengecek saldo {asset}: {e}")
-        return 0
+# Fungsi Kirim Notifikasi *Hold* (30 Menit)
+def send_hold_status():
+    global last_trade_time
 
-# Fungsi Menghitung RSI
-def calculate_rsi(data, period=14):
-    delta = data.diff(1)
-    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    while True:
+        time.sleep(1800)  # 30 menit
 
-# Fungsi Melatih Model LSTM
-def train_lstm_model():
-    try:
-        historical_data = binance.fetch_ohlcv(symbol, timeframe='1h', limit=1000)
-        df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        if entry_price is None:
+            reason = "🔍 Bot masih menunggu sinyal yang kuat sebelum membuka order."
+            send_telegram_message(f"⏳ *Status: HOLD* ⏳\n{reason}")
 
-        close_prices = df['close'].values.reshape(-1, 1)
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_data = scaler.fit_transform(close_prices)
+# Fungsi Kirim Notifikasi *Open Posisi* (10 Menit)
+def send_trade_status():
+    global entry_price
 
-        X, y = [], []
-        for i in range(60, len(scaled_data)):
-            X.append(scaled_data[i-60:i, 0])
-            y.append(scaled_data[i, 0])
+    while True:
+        time.sleep(600)  # 10 menit
 
-        X, y = np.array(X), np.array(y)
-        X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+        if entry_price is not None:
+            ticker = binance.fetch_ticker(symbol)
+            current_price = ticker['last']
+            tp_price = entry_price * (1 + tp_percentage)
+            sl_price = entry_price * (1 - sl_percentage)
 
-        model = Sequential([
-            LSTM(50, return_sequences=True, input_shape=(X.shape[1], 1)),
-            Dropout(0.2),
-            LSTM(50, return_sequences=False),
-            Dropout(0.2),
-            Dense(1)
-        ])
-
-        model.compile(optimizer='adam', loss='mean_squared_error')
-        model.fit(X, y, epochs=50, batch_size=32, verbose=1)
-        return model, scaler
-    except Exception as e:
-        logging.error(f"Error saat melatih model LSTM: {e}")
-        return None, None
-
-# Fungsi Prediksi Harga LSTM
-def predict_price_lstm(model, scaler):
-    try:
-        latest_data = binance.fetch_ohlcv(symbol, timeframe='1h', limit=60)
-        df = pd.DataFrame(latest_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        close_prices = df['close'].values.reshape(-1, 1)
-
-        scaled_data = scaler.transform(close_prices)
-        X_input = scaled_data[-60:].reshape(1, 60, 1)
-
-        predicted_price = model.predict(X_input)
-        return scaler.inverse_transform(predicted_price)[0][0]
-    except Exception as e:
-        logging.error(f"Error saat prediksi harga LSTM: {e}")
-        return 0
+            send_telegram_message(f"""
+📢 *Status: OPEN TRADE*
+- 🎯 TP: {tp_price:.2f} USDT
+- 🛑 SL: {sl_price:.2f} USDT
+- 📊 Harga Sekarang: {current_price:.2f} USDT
+⏳ Menunggu TP atau SL...
+""")
 
 # Fungsi Open Order
 def place_order(order_type):
+    global entry_price
+
     try:
         ticker = binance.fetch_ticker(symbol)
         price = ticker["last"]
-        qty = trade_amount / price
+        qty = trade_amount / price  
 
         if order_type == "BUY":
             order = binance.create_market_buy_order(symbol, qty)
@@ -131,28 +98,58 @@ def place_order(order_type):
         logging.error(f"Order {order_type} gagal: {e}")
         return None
 
-# Fungsi menjalankan bot
-def trading_bot():
-    lstm_model, lstm_scaler = train_lstm_model()
+# Fungsi Cek TP dan SL
+def check_tp_sl():
+    global entry_price
 
     while True:
-        usdt_balance = check_balance("USDT")
-        btc_balance = check_balance("BTC")
-        lstm_predicted_price = predict_price_lstm(lstm_model, lstm_scaler)
-        current_price = binance.fetch_ticker(symbol)["last"]
+        if entry_price is None:
+            time.sleep(10)
+            continue
 
-        # Hitung RSI
-        historical_data = binance.fetch_ohlcv(symbol, timeframe='15m', limit=100)
-        df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['RSI'] = calculate_rsi(df['close'])
-        rsi = df['RSI'].iloc[-1]
+        try:
+            ticker = binance.fetch_ticker(symbol)
+            current_price = ticker['last']
 
-        if lstm_predicted_price > current_price * 1.01 and rsi < 30 and usdt_balance >= trade_amount:
-            entry_price = place_order("BUY")
-            if entry_price:
-                send_telegram_message(f"✅ *BUY Order Placed* at {entry_price:.2f} USDT")
+            tp_price = entry_price * (1 + tp_percentage)
+            sl_price = entry_price * (1 - sl_percentage)
 
-        time.sleep(900)
+            if current_price >= tp_price:
+                place_order("SELL")
+                send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
+                entry_price = None  # Reset setelah jual
+            elif current_price <= sl_price:
+                place_order("SELL")
+                send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
+                entry_price = None  # Reset setelah jual
 
-# Eksekusi bot
-trading_bot()
+            time.sleep(10)
+        except Exception as e:
+            logging.error(f"Error saat memantau TP/SL: {e}")
+
+# Fungsi Menjalankan Bot
+def trading_bot():
+    global entry_price
+
+    # Jalankan notifikasi status di thread terpisah
+    threading.Thread(target=send_hold_status, daemon=True).start()
+    threading.Thread(target=send_trade_status, daemon=True).start()
+
+    while True:
+        if entry_price is None:
+            ticker = binance.fetch_ticker(symbol)
+            current_price = ticker['last']
+
+            # Logika Beli
+            if some_buy_condition:  # Ganti dengan logika beli yang tepat
+                entry_price = place_order("BUY")
+        
+        time.sleep(900)  # Tunggu 15 menit
+
+# Jalankan bot dalam thread terpisah
+trading_thread = threading.Thread(target=trading_bot, daemon=True)
+trading_thread.start()
+
+# Jalankan TP/SL Monitoring di thread terpisah
+tp_sl_thread = threading.Thread(target=check_tp_sl, daemon=True)
+tp_sl_thread.start()
