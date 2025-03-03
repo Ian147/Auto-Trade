@@ -48,15 +48,15 @@ def send_telegram_message(message):
 def check_balance():
     try:
         balance = binance.fetch_balance()
-        spot_balance = balance['total']['USDT']
-        logging.info(f"Saldo spot: {spot_balance} USDT")
-        return spot_balance
+        usdt_balance = balance['total'].get('USDT', 0)
+        btc_balance = balance['total'].get('BTC', 0)
+        return usdt_balance, btc_balance
     except Exception as e:
         logging.error(f"Error saat mengecek saldo: {e}")
-        return 0
+        return 0, 0
 
-# Fungsi Open Order (BUY & SELL)
-def place_order(order_type, qty=None):
+# Fungsi Open Order
+def place_order(order_type, entry_price=None):
     try:
         ticker = binance.fetch_ticker(symbol)
         price = ticker["last"]
@@ -64,48 +64,45 @@ def place_order(order_type, qty=None):
         if order_type == "BUY":
             qty = trade_amount / price  # Konversi USDT ke BTC
             order = binance.create_market_buy_order(symbol, qty)
-        elif order_type == "SELL" and qty:
-            order = binance.create_market_sell_order(symbol, qty)
-
-        last_trade = binance.fetch_my_trades(symbol)[-1]
-        entry_price = last_trade['price']
-        
-        send_telegram_message(f"📈 *{order_type} Order Executed*\n- Harga: {entry_price} USDT\n- TP: {entry_price * (1 + tp_percentage):.2f} USDT\n- SL: {entry_price * (1 - sl_percentage):.2f} USDT")
-        return entry_price, qty
+            send_telegram_message(f"📈 *BUY Order Executed*\n- Harga: {price:.2f} USDT")
+            return price, qty
+        elif order_type == "SELL" and entry_price:
+            btc_balance = check_balance()[1]
+            order = binance.create_market_sell_order(symbol, btc_balance)
+            send_telegram_message(f"✅ *SELL Order Executed*\n- Harga: {price:.2f} USDT")
+            return price
     except Exception as e:
         logging.error(f"Order {order_type} gagal: {e}")
-        return None, None
+        return None
 
 # Fungsi Cek TP dan SL
-def check_tp_sl(entry_price, btc_qty):
-    def monitor_price():
-        while True:
-            try:
-                ticker = binance.fetch_ticker(symbol)
-                current_price = ticker['last']
+def check_tp_sl(entry_price):
+    while True:
+        try:
+            ticker = binance.fetch_ticker(symbol)
+            current_price = ticker['last']
 
-                if current_price >= entry_price * (1 + tp_percentage):
-                    place_order("SELL", btc_qty)
-                    send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
-                    break
-                elif current_price <= entry_price * (1 - sl_percentage):
-                    place_order("SELL", btc_qty)
-                    send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
-                    break
+            tp_price = entry_price * (1 + tp_percentage)
+            sl_price = entry_price * (1 - sl_percentage)
 
-                time.sleep(10)  # Cek harga setiap 10 detik
-            except Exception as e:
-                logging.error(f"Error saat memantau TP/SL: {e}")
-                break
+            if current_price >= tp_price:
+                place_order("SELL", entry_price)
+                send_telegram_message(f"✅ *Take Profit Tercapai!* 🚀\n- Harga Jual: {current_price:.2f} USDT")
+                return
+            elif current_price <= sl_price:
+                place_order("SELL", entry_price)
+                send_telegram_message(f"⚠️ *Stop Loss Terpicu!* 📉\n- Harga Jual: {current_price:.2f} USDT")
+                return
 
-    thread = threading.Thread(target=monitor_price)
-    thread.daemon = True
-    thread.start()
+            time.sleep(10)  # Cek harga setiap 10 detik
+        except Exception as e:
+            logging.error(f"Error saat memantau TP/SL: {e}")
+            break
 
 # Fungsi Melatih Model LSTM
 def train_lstm_model():
     try:
-        historical_data = binance.fetch_ohlcv(symbol, timeframe='15m', limit=1000)
+        historical_data = binance.fetch_ohlcv(symbol, timeframe='15m', limit=5000)  # Ambil 5000 data
         df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
@@ -179,15 +176,15 @@ def trading_bot():
     model, scaler = train_lstm_model()
 
     while True:
-        spot_balance = check_balance()
-        if spot_balance >= trade_amount:
+        usdt_balance, _ = check_balance()
+        if usdt_balance >= trade_amount:
             predicted_price = predict_price(model, scaler)
             current_price = binance.fetch_ticker(symbol)["last"]
 
             if predicted_price > current_price * 1.01:
-                entry_price, btc_qty = place_order("BUY")
+                entry_price, _ = place_order("BUY")
                 if entry_price:
-                    check_tp_sl(entry_price, btc_qty)
+                    check_tp_sl(entry_price)
 
         time.sleep(900)  # Tunggu 15 menit
 
