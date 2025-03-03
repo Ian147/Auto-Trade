@@ -23,20 +23,19 @@ except Exception as e:
     logging.error(f"❌ Gagal memuat model: {e}")
     exit()
 
-# Inisialisasi MinMaxScaler (Pastikan sesuai dengan scaler saat training)
+# Inisialisasi MinMaxScaler
 scaler = MinMaxScaler(feature_range=(0, 1))
 
 def prepare_data(df, lookback=50):
     """ Menyiapkan data untuk prediksi dengan LSTM """
     data = df['close'].values.reshape(-1, 1)
-    scaled_data = scaler.fit_transform(data)  # Transformasi data ke skala (0,1)
+    scaled_data = scaler.fit_transform(data)
 
-    X, y = [], []
+    X = []
     for i in range(len(scaled_data) - lookback):
         X.append(scaled_data[i:i+lookback])
-        y.append(scaled_data[i+lookback])
 
-    return np.array(X), np.array(y)
+    return np.array(X)
 
 def predict_price():
     """ Memprediksi harga menggunakan model LSTM """
@@ -45,13 +44,13 @@ def predict_price():
         logging.warning("⚠️ Data tidak cukup untuk prediksi!")
         return None
 
-    X, _ = prepare_data(df)
+    X = prepare_data(df)
     if len(X) == 0:
         logging.warning("⚠️ Data tidak cukup untuk prediksi!")
         return None
 
     pred = model.predict(X[-1].reshape(1, 50, 1))
-    predicted_price = scaler.inverse_transform(pred)[0][0]  # Konversi kembali ke harga asli
+    predicted_price = scaler.inverse_transform(pred)[0][0]
     return predicted_price
 
 def send_telegram_message(message):
@@ -63,27 +62,47 @@ def send_telegram_message(message):
     except Exception as e:
         logging.error(f"❌ Gagal mengirim Telegram: {e}")
 
+def get_balance(asset):
+    """ Mendapatkan saldo aset tertentu """
+    try:
+        balance = client.get_asset_balance(asset=asset)
+        return float(balance["free"]) if balance else 0.0
+    except Exception as e:
+        logging.error(f"❌ Gagal mendapatkan saldo {asset}: {e}")
+        return 0.0
+
 def place_order(order_type):
     """ Menjalankan market order di Binance """
     try:
         if order_type == "BUY":
+            usdt_balance = get_balance("USDT")
+            btc_balance = get_balance("BTC")
+
+            # Syarat BUY: Saldo USDT ≥ 10 USDT dan Saldo BTC < 0.00001 BTC
+            if usdt_balance < 10:
+                logging.warning("⚠️ Saldo USDT kurang dari 10, tidak bisa BUY.")
+                return None
+            if btc_balance >= 0.00001:
+                logging.info("⚠️ Sudah memiliki BTC ≥ 0.00001, tidak perlu BUY.")
+                return None
+
             price_now = predict_price()
             if price_now is None:
                 logging.error("❌ Tidak bisa mengeksekusi order, prediksi harga tidak tersedia.")
                 return None
 
-            qty = round(TRADE_AMOUNT_USDT / price_now, 6)
+            qty = round(10 / price_now, 6)  # Beli BTC dengan 10 USDT
             order = client.order_market_buy(symbol=PAIR, quantity=qty)
             send_telegram_message(f"✅ BUY {qty} {PAIR} @ {price_now}")
             return order
 
         elif order_type == "SELL":
-            balance = client.get_asset_balance(asset="BTC")
-            if balance is None or float(balance["free"]) <= 0:
+            btc_balance = get_balance("BTC")
+            if btc_balance <= 0:
                 logging.warning("⚠️ Tidak ada saldo BTC untuk dijual.")
                 return None
 
-            qty = round(float(balance["free"]), 6)
+            qty = round(btc_balance, 6)  # Jual seluruh saldo BTC
             order = client.order_market_sell(symbol=PAIR, quantity=qty)
             send_telegram_message(f"✅ SELL {qty} {PAIR} @ {predict_price()}")
             return order
@@ -112,11 +131,11 @@ def trading_bot():
 
             if price_now > price_last * (1 + TP_PERCENT / 100):
                 logging.info("🚀 Take Profit Triggered")
-                place_order("SELL")
+                place_order("SELL")  # **SELL seluruh saldo BTC saat TP**
 
             elif price_now < price_last * (1 - SL_PERCENT / 100):
                 logging.info("⚠️ Stop Loss Triggered")
-                place_order("SELL")
+                place_order("SELL")  # **SELL seluruh saldo BTC saat SL**
 
             elif price_now > price_last:
                 logging.info("📈 Buy Signal Detected")
