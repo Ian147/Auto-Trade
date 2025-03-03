@@ -14,12 +14,12 @@ from sklearn.metrics import mean_absolute_error
 logging.basicConfig(filename='trading_signal.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Konfigurasi API Binance
-api_key = "API_KEY_ANDA"
-api_secret = "API_SECRET_ANDA"
+api_key = "j70PupVRg6FbppOVsv0NJeyEYhf24fc9H36XvKQTP496CE8iQpuh0KlurfRGvrLw"
+api_secret = "YGp4SiUdZMQ8ykAszgzSB1eLqv5ZiFM9wZTuV3Z2VOtoM46yDNuy1CBr703PtLVT"
 
 # Konfigurasi API Telegram
-telegram_token = "TELEGRAM_BOT_TOKEN"
-telegram_chat_id = "TELEGRAM_CHAT_ID"
+telegram_token = "8011128170:AAEvCJrvMRinnIsInJmqLjzpWguz88tPWVw"
+telegram_chat_id = "681125756"
 
 # Inisialisasi Binance
 binance = ccxt.binance({
