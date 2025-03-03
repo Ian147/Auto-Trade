@@ -1,54 +1,68 @@
 import numpy as np
 import pandas as pd
+import logging
 import tensorflow as tf
-from keras.models import Sequential
-from keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
-import os
+from data_fetcher import get_binance_ohlcv
+import joblib
 
-# Load data OHLCV dari file CSV
-file_path = "ohlcv_data.csv"
-if not os.path.exists(file_path):
-    raise FileNotFoundError(f"File {file_path} tidak ditemukan!")
+# Konfigurasi logging
+logging.basicConfig(level=logging.INFO)
 
-data = pd.read_csv(file_path)
+# Parameter
+LOOKBACK = 50  # Jumlah candle yang digunakan untuk prediksi
+EPOCHS = 50    # Jumlah epoch training
+BATCH_SIZE = 32
 
-# Ambil hanya 10.000 data terakhir
-data = data.tail(10000)
+# Ambil data dari Binance
+logging.info("📥 Mengambil data OHLCV dari Binance...")
+df = get_binance_ohlcv(10000)  # Ambil 10.000 candle
 
-# Preprocessing data
+if df is None or df.empty:
+    logging.error("❌ Gagal mengambil data OHLCV!")
+    exit()
+
+# Normalisasi data
 scaler = MinMaxScaler(feature_range=(0, 1))
-scaled_data = scaler.fit_transform(data[['open', 'high', 'low', 'close', 'volume']])
+df['close_scaled'] = scaler.fit_transform(df['close'].values.reshape(-1, 1))
 
-X, y = [], []
-time_steps = 60  # Gunakan 60 candle terakhir untuk prediksi
-for i in range(len(scaled_data) - time_steps):
-    X.append(scaled_data[i:i+time_steps])
-    y.append(scaled_data[i+time_steps, 3])  # Prediksi harga close
+# Simpan scaler untuk digunakan nanti di bot trading
+joblib.dump(scaler, "scaler.pkl")
 
-X, y = np.array(X), np.array(y)
+# Persiapan data untuk LSTM
+def prepare_data(df, lookback=LOOKBACK):
+    X, y = [], []
+    for i in range(len(df) - lookback):
+        X.append(df['close_scaled'].iloc[i:i+lookback].values)
+        y.append(df['close_scaled'].iloc[i+lookback])
 
-# Split data
-split_ratio = 0.8
-split_index = int(len(X) * split_ratio)
-X_train, X_test = X[:split_index], X[split_index:]
-y_train, y_test = y[:split_index], y[split_index:]
+    return np.array(X), np.array(y)
 
-# Build LSTM Model
+X_train, y_train = prepare_data(df)
+
+# Bentuk input untuk LSTM (samples, time_steps, features)
+X_train = X_train.reshape(X_train.shape[0], LOOKBACK, 1)
+
+# Bangun model LSTM
+logging.info("🛠️ Membangun model LSTM...")
 model = Sequential([
-    LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], X.shape[2])),
+    LSTM(50, return_sequences=True, input_shape=(LOOKBACK, 1)),
     Dropout(0.2),
-    LSTM(units=50, return_sequences=False),
+    LSTM(50, return_sequences=False),
     Dropout(0.2),
-    Dense(units=25),
-    Dense(units=1)
+    Dense(25, activation="relu"),
+    Dense(1)
 ])
 
-model.compile(optimizer='adam', loss='mean_squared_error')
+# Kompilasi model
+model.compile(optimizer="adam", loss="mean_squared_error")
 
-# Train Model dengan 10.000 data
-model.fit(X_train, y_train, epochs=50, batch_size=32, validation_data=(X_test, y_test))
+# Training model
+logging.info("🚀 Memulai training model...")
+model.fit(X_train, y_train, epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)
 
-# Save Model
+# Simpan model
 model.save("lstm_model.h5")
-print("Model telah dilatih dengan 10.000 data dan disimpan sebagai lstm_model.h5")
+logging.info("✅ Model berhasil disimpan sebagai 'lstm_model.h5'!")
