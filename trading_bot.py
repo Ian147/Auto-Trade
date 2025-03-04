@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import logging
 import time
 import requests
@@ -27,7 +28,7 @@ scaler = MinMaxScaler(feature_range=(0, 1))
 
 def prepare_data(df, lookback=50):
     """ Menyiapkan data untuk prediksi dengan LSTM """
-    data = df["close"].values.reshape(-1, 1)
+    data = df['close'].values.reshape(-1, 1)
     scaled_data = scaler.fit_transform(data)
 
     X = []
@@ -70,13 +71,15 @@ def get_balance(asset):
         logging.error(f"❌ Gagal mendapatkan saldo {asset}: {e}")
         return 0.0
 
+def round_step_size(quantity, step_size=0.00001):
+    """ Membulatkan quantity sesuai aturan stepSize Binance """
+    return round(quantity - (quantity % step_size), 8)
+
 def place_order(order_type):
     """ Menjalankan market order di Binance """
     try:
         if order_type == "BUY":
             usdt_balance = get_balance("USDT")
-
-            # Syarat BUY: Saldo USDT harus ≥ TRADE_AMOUNT_USDT
             if usdt_balance < TRADE_AMOUNT_USDT:
                 logging.warning("⚠️ Saldo USDT tidak cukup untuk BUY.")
                 return None
@@ -86,13 +89,16 @@ def place_order(order_type):
                 logging.error("❌ Tidak bisa mengeksekusi order, prediksi harga tidak tersedia.")
                 return None
 
-            qty = round(TRADE_AMOUNT_USDT / price_now, 6)  # Beli BTC dengan TRADE_AMOUNT_USDT
+            # Perhitungan jumlah pembelian
+            qty = TRADE_AMOUNT_USDT / price_now  
+            qty = round_step_size(qty)  # Sesuaikan dengan stepSize Binance
+
             order = client.order_market_buy(symbol=PAIR, quantity=qty)
 
             tp_price = round(price_now * (1 + TP_PERCENT / 100), 2)
             sl_price = round(price_now * (1 - SL_PERCENT / 100), 2)
 
-            send_telegram_message(f"✅ BUY {qty} {PAIR} @ {price_now}\n🎯 TP: {tp_price}\n🛑 SL: {sl_price}")
+            send_telegram_message(f"✅ BUY {qty} BTC @ {price_now}\n🎯 TP: {tp_price}\n🛑 SL: {sl_price}")
             return order
 
         elif order_type == "SELL":
@@ -101,11 +107,10 @@ def place_order(order_type):
                 logging.warning("⚠️ Tidak ada saldo BTC untuk dijual.")
                 return None
 
-            qty = round(btc_balance, 6)  # Jual seluruh saldo BTC
+            qty = round_step_size(btc_balance)  # Jual seluruh saldo BTC
             order = client.order_market_sell(symbol=PAIR, quantity=qty)
 
-            price_now = predict_price()
-            send_telegram_message(f"✅ SELL {qty} {PAIR} @ {price_now}")
+            send_telegram_message(f"✅ SELL {qty} BTC @ {predict_price()}")
             return order
 
     except Exception as e:
@@ -128,7 +133,7 @@ def trading_bot():
                 time.sleep(60)
                 continue
 
-            price_last = df["close"].iloc[-1]
+            price_last = df['close'].iloc[-1]
 
             if price_now > price_last * (1 + TP_PERCENT / 100):
                 logging.info("🚀 Take Profit Triggered")
