@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import logging
 import time
 import requests
@@ -28,7 +27,7 @@ scaler = MinMaxScaler(feature_range=(0, 1))
 
 def prepare_data(df, lookback=50):
     """ Menyiapkan data untuk prediksi dengan LSTM """
-    data = df['close'].values.reshape(-1, 1)
+    data = df["close"].values.reshape(-1, 1)
     scaled_data = scaler.fit_transform(data)
 
     X = []
@@ -71,45 +70,29 @@ def get_balance(asset):
         logging.error(f"❌ Gagal mendapatkan saldo {asset}: {e}")
         return 0.0
 
-def get_lot_size(symbol):
-    """ Mendapatkan LOT_SIZE untuk pasangan trading """
-    try:
-        info = client.get_symbol_info(symbol)
-        for f in info["filters"]:
-            if f["filterType"] == "LOT_SIZE":
-                return float(f["minQty"]), float(f["stepSize"])
-    except Exception as e:
-        logging.error(f"❌ Gagal mendapatkan LOT_SIZE: {e}")
-    return 0.00001, 0.00001  # Default jika gagal
-
-def round_step(value, step_size):
-    """ Membulatkan nilai ke step_size terdekat """
-    return round(value - (value % step_size), 8)
-
 def place_order(order_type):
-    """ Menjalankan market order di Binance dengan pembulatan LOT_SIZE """
+    """ Menjalankan market order di Binance """
     try:
-        min_qty, step_size = get_lot_size(PAIR)
-
         if order_type == "BUY":
             usdt_balance = get_balance("USDT")
-            if usdt_balance < 10:
-                logging.warning("⚠️ Saldo USDT kurang dari 10, tidak bisa BUY.")
+
+            # Syarat BUY: Saldo USDT harus ≥ TRADE_AMOUNT_USDT
+            if usdt_balance < TRADE_AMOUNT_USDT:
+                logging.warning("⚠️ Saldo USDT tidak cukup untuk BUY.")
                 return None
 
             price_now = predict_price()
             if price_now is None:
-                logging.error("❌ Prediksi harga tidak tersedia.")
+                logging.error("❌ Tidak bisa mengeksekusi order, prediksi harga tidak tersedia.")
                 return None
 
-            qty = round_step(10 / price_now, step_size)  # Pastikan sesuai LOT_SIZE
-
-            if qty < min_qty:
-                logging.warning(f"⚠️ Qty {qty} lebih kecil dari minimum {min_qty}, order dibatalkan.")
-                return None
-
+            qty = round(TRADE_AMOUNT_USDT / price_now, 6)  # Beli BTC dengan TRADE_AMOUNT_USDT
             order = client.order_market_buy(symbol=PAIR, quantity=qty)
-            send_telegram_message(f"✅ BUY {qty} {PAIR} @ {price_now} \n🎯 TP: {price_now * (1 + TP_PERCENT/100)} \n🛑 SL: {price_now * (1 - SL_PERCENT/100)}")
+
+            tp_price = round(price_now * (1 + TP_PERCENT / 100), 2)
+            sl_price = round(price_now * (1 - SL_PERCENT / 100), 2)
+
+            send_telegram_message(f"✅ BUY {qty} {PAIR} @ {price_now}\n🎯 TP: {tp_price}\n🛑 SL: {sl_price}")
             return order
 
         elif order_type == "SELL":
@@ -118,14 +101,11 @@ def place_order(order_type):
                 logging.warning("⚠️ Tidak ada saldo BTC untuk dijual.")
                 return None
 
-            qty = round_step(btc_balance, step_size)  # Pastikan sesuai LOT_SIZE
-
-            if qty < min_qty:
-                logging.warning(f"⚠️ Qty {qty} lebih kecil dari minimum {min_qty}, order dibatalkan.")
-                return None
-
+            qty = round(btc_balance, 6)  # Jual seluruh saldo BTC
             order = client.order_market_sell(symbol=PAIR, quantity=qty)
-            send_telegram_message(f"✅ SELL {qty} {PAIR} @ {predict_price()}")
+
+            price_now = predict_price()
+            send_telegram_message(f"✅ SELL {qty} {PAIR} @ {price_now}")
             return order
 
     except Exception as e:
@@ -148,17 +128,15 @@ def trading_bot():
                 time.sleep(60)
                 continue
 
-            price_last = df['close'].iloc[-1]
+            price_last = df["close"].iloc[-1]
 
             if price_now > price_last * (1 + TP_PERCENT / 100):
                 logging.info("🚀 Take Profit Triggered")
-                send_telegram_message("🚀 Take Profit Triggered, SELLING!")
-                place_order("SELL")
+                place_order("SELL")  # **SELL seluruh saldo BTC saat TP**
 
             elif price_now < price_last * (1 - SL_PERCENT / 100):
                 logging.info("⚠️ Stop Loss Triggered")
-                send_telegram_message("⚠️ Stop Loss Triggered, SELLING!")
-                place_order("SELL")
+                place_order("SELL")  # **SELL seluruh saldo BTC saat SL**
 
             elif price_now > price_last:
                 logging.info("📈 Buy Signal Detected")
