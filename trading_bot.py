@@ -74,16 +74,16 @@ def get_balance(asset):
 def place_order(order_type):
     """ Menjalankan market order di Binance """
     try:
+        symbol_info = client.get_symbol_info("BTCUSDT")
+        lot_size_filter = next(f for f in symbol_info["filters"] if f["filterType"] == "LOT_SIZE")
+        min_qty = float(lot_size_filter["minQty"])
+        step_size = float(lot_size_filter["stepSize"])
+
         if order_type == "BUY":
             usdt_balance = get_balance("USDT")
-            btc_balance = get_balance("BTC")
 
-            # Syarat BUY: Saldo USDT ≥ 10 USDT dan Saldo BTC < 0.00001 BTC
             if usdt_balance < 10:
                 logging.warning("⚠️ Saldo USDT kurang dari 10, tidak bisa BUY.")
-                return None
-            if btc_balance >= 0.00001:
-                logging.info("⚠️ Sudah memiliki BTC ≥ 0.00001, tidak perlu BUY.")
                 return None
 
             price_now = predict_price()
@@ -91,9 +91,15 @@ def place_order(order_type):
                 logging.error("❌ Tidak bisa mengeksekusi order, prediksi harga tidak tersedia.")
                 return None
 
-            qty = round(10 / price_now, 6)  # Beli BTC dengan 10 USDT
-            order = client.order_market_buy(symbol=PAIR, quantity=qty)
-            send_telegram_message(f"✅ BUY {qty} {PAIR} @ {price_now}")
+            qty = 10 / price_now  
+            qty = max(min_qty, (qty // step_size) * step_size)  
+
+            if qty < min_qty:
+                logging.error(f"❌ Jumlah BTC {qty} terlalu kecil, minimal {min_qty}.")
+                return None
+
+            order = client.order_market_buy(symbol="BTCUSDT", quantity=qty)
+            send_telegram_message(f"✅ BUY {qty} BTC @ {price_now}")
             return order
 
         elif order_type == "SELL":
@@ -103,8 +109,8 @@ def place_order(order_type):
                 return None
 
             qty = round(btc_balance, 6)  # Jual seluruh saldo BTC
-            order = client.order_market_sell(symbol=PAIR, quantity=qty)
-            send_telegram_message(f"✅ SELL {qty} {PAIR} @ {predict_price()}")
+            order = client.order_market_sell(symbol="BTCUSDT", quantity=qty)
+            send_telegram_message(f"✅ SELL {qty} BTC @ {predict_price()}")
             return order
 
     except Exception as e:
