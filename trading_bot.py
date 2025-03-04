@@ -87,7 +87,8 @@ def get_lot_size():
 
 def round_step_size(value, step_size):
     """ Membulatkan ke kelipatan step_size sesuai aturan Binance """
-    return float(Decimal(value).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
+    value = float(value)  # Perbaikan error numpy.float32
+    return float(Decimal(str(value)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
 
 def place_order(order_type):
     """ Menjalankan market order di Binance """
