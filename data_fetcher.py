@@ -1,64 +1,59 @@
-import ccxt
 import pandas as pd
 import time
-import os
+import logging
+from binance.client import Client
 
-# Inisialisasi Binance API
-exchange = ccxt.binance()
+# Konfigurasi logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Pair yang ingin diambil
-symbol = 'BTC/USDT'
+# API Binance (gunakan API sendiri)
+API_KEY = "YOUR_API_KEY"
+API_SECRET = "YOUR_API_SECRET"
 
-# Timeframe
-timeframe = '15m'
+# Konfigurasi pasangan trading dan interval waktu
+SYMBOL = "BTCUSDT"
+INTERVAL = Client.KLINE_INTERVAL_15MINUTE
+DATA_PATH = "data.csv"
 
-# Jumlah maksimum data OHLCV per request
-limit = 1000
+# Koneksi ke Binance
+client = Client(API_KEY, API_SECRET)
 
-# Target total data
-total_data = 1000000
+def fetch_historical_data():
+    """Mengambil data historis OHLCV dari Binance"""
+    logging.info(f"📥 Mengunduh data {SYMBOL} dengan interval {INTERVAL}...")
 
-# Cek apakah file sudah ada
-file_name = 'data.csv'
-
-if os.path.exists(file_name):
-    df_old = pd.read_csv(file_name)
+    # Mulai dari timestamp awal (misalnya 2017)
+    start_str = "2017-08-17 04:00:00"
+    start_ts = int(pd.Timestamp(start_str).timestamp() * 1000)  # Ubah ke milidetik
+    end_ts = int(pd.Timestamp.now().timestamp() * 1000)  # Timestamp sekarang
     
-    # ✅ Ubah kolom timestamp ke datetime tanpa unit='ms'
-    df_old['timestamp'] = pd.to_datetime(df_old['timestamp'])
+    all_data = []
     
-    last_timestamp = df_old['timestamp'].max()
-    since = int(last_timestamp.timestamp() * 1000) + 1  # Convert ke milidetik
-    ohlcv_list = df_old.values.tolist()
-    print(f"🔄 Melanjutkan pengambilan data dari {last_timestamp}...")
-else:
-    since = exchange.parse8601('2017-08-17T00:00:00Z')
-    ohlcv_list = []
+    while start_ts < end_ts:
+        logging.info(f"📊 Mengambil data dari {pd.to_datetime(start_ts, unit='ms')}...")
+        
+        # Ambil data dari Binance
+        klines = client.get_klines(symbol=SYMBOL, interval=INTERVAL, startTime=start_ts, limit=1000)
+        if not klines:
+            break  # Jika tidak ada data lagi, berhenti
+        
+        for entry in klines:
+            all_data.append([
+                pd.to_datetime(entry[0], unit='ms'),  # Timestamp
+                float(entry[1]),  # Open
+                float(entry[2]),  # High
+                float(entry[3]),  # Low
+                float(entry[4]),  # Close
+                float(entry[5])   # Volume
+            ])
+        
+        start_ts = klines[-1][0] + 1  # Update timestamp ke data berikutnya
+        time.sleep(1)  # Hindari rate limit
 
-print("🚀 Mengunduh data dari Binance...")
+    # Simpan ke CSV
+    df = pd.DataFrame(all_data, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df.to_csv(DATA_PATH, index=False)
+    logging.info(f"✅ Data disimpan ke {DATA_PATH} ({len(df)} baris)")
 
-while len(ohlcv_list) < total_data:
-    try:
-        data = exchange.fetch_ohlcv(symbol, timeframe, since, limit)
-
-        if not data:
-            print("✅ Tidak ada data lagi.")
-            break
-
-        ohlcv_list.extend(data)
-        since = data[-1][0] + 1
-
-        print(f"📊 Data diunduh: {len(ohlcv_list)} / {total_data}")
-
-        time.sleep(1)
-
-    except Exception as e:
-        print(f"⚠️ Error: {e}")
-        time.sleep(5)
-
-# ✅ Konversi ke DataFrame dengan timestamp yang benar
-df = pd.DataFrame(ohlcv_list, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-
-df.to_csv(file_name, index=False)
-print(f"✅ Data berhasil disimpan sebagai '{file_name}' dengan {len(df)} baris.")
+if __name__ == "__main__":
+    fetch_historical_data()
