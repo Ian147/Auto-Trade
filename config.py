@@ -6,5 +6,5 @@ TELEGRAM_CHAT_ID = "681125756"
 PAIR = "BTCUSDT"  # Pasangan trading
 TIMEFRAME = "15m" # Timeframe untuk prediksi
 TRADE_AMOUNT_USDT = 10  # USDT per order
-TP_PERCENT = 5  # Take Profit +5%
+TP_PERCENT = 1.5  # Take Profit +1.5%
 SL_PERCENT = 5  # Stop Loss -5%
