@@ -5,64 +5,62 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
-from data_fetcher import get_binance_ohlcv
-import joblib
+from data_fetcher import get_binance_ohlcv  # Pastikan ini tersedia
+from config import PAIR
 
-# Konfigurasi logging
 logging.basicConfig(level=logging.INFO)
 
-# Parameter
-LOOKBACK = 50  # Jumlah candle yang digunakan untuk prediksi
-EPOCHS = 50    # Jumlah epoch training
-BATCH_SIZE = 32
+# Ambil 100.000 data OHLCV dari Binance
+def fetch_data():
+    df = get_binance_ohlcv(100000)  # Mengambil 100.000 data
+    if df is None or df.empty:
+        logging.error("❌ Gagal mengambil data dari Binance.")
+        exit()
+    return df
 
-# Ambil data dari Binance
-logging.info("📥 Mengambil data OHLCV dari Binance...")
-df = get_binance_ohlcv(10000)  # Ambil 10.000 candle
+# Menyiapkan dataset
+def prepare_data(df, lookback=50):
+    """ Menyiapkan data untuk pelatihan LSTM """
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    data = df['close'].values.reshape(-1, 1)
+    scaled_data = scaler.fit_transform(data)
 
-if df is None or df.empty:
-    logging.error("❌ Gagal mengambil data OHLCV!")
-    exit()
-
-# Normalisasi data
-scaler = MinMaxScaler(feature_range=(0, 1))
-df['close_scaled'] = scaler.fit_transform(df['close'].values.reshape(-1, 1))
-
-# Simpan scaler untuk digunakan nanti di bot trading
-joblib.dump(scaler, "scaler.pkl")
-
-# Persiapan data untuk LSTM
-def prepare_data(df, lookback=LOOKBACK):
     X, y = [], []
-    for i in range(len(df) - lookback):
-        X.append(df['close_scaled'].iloc[i:i+lookback].values)
-        y.append(df['close_scaled'].iloc[i+lookback])
+    for i in range(len(scaled_data) - lookback):
+        X.append(scaled_data[i:i+lookback])
+        y.append(scaled_data[i+lookback])
 
-    return np.array(X), np.array(y)
+    return np.array(X), np.array(y), scaler
 
-X_train, y_train = prepare_data(df)
+# Membuat model LSTM
+def build_model(input_shape):
+    """ Membangun model LSTM """
+    model = Sequential([
+        LSTM(50, return_sequences=True, input_shape=input_shape),
+        Dropout(0.2),
+        LSTM(50),
+        Dropout(0.2),
+        Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mse')
+    return model
 
-# Bentuk input untuk LSTM (samples, time_steps, features)
-X_train = X_train.reshape(X_train.shape[0], LOOKBACK, 1)
+# Melatih model
+def train_model():
+    df = fetch_data()
+    X, y, scaler = prepare_data(df)
+    
+    # Bentuk input: (samples, time steps, features)
+    model = build_model((X.shape[1], X.shape[2]))
 
-# Bangun model LSTM
-logging.info("🛠️ Membangun model LSTM...")
-model = Sequential([
-    LSTM(50, return_sequences=True, input_shape=(LOOKBACK, 1)),
-    Dropout(0.2),
-    LSTM(50, return_sequences=False),
-    Dropout(0.2),
-    Dense(25, activation="relu"),
-    Dense(1)
-])
+    logging.info("🚀 Mulai melatih model...")
+    model.fit(X, y, epochs=20, batch_size=64, validation_split=0.2, verbose=1)
 
-# Kompilasi model
-model.compile(optimizer="adam", loss="mean_squared_error")
+    # Simpan model dan scaler
+    model.save("lstm_model.h5")
+    np.save("scaler.npy", scaler.scale_)
 
-# Training model
-logging.info("🚀 Memulai training model...")
-model.fit(X_train, y_train, epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)
+    logging.info("✅ Model berhasil disimpan sebagai 'lstm_model.h5'")
 
-# Simpan model
-model.save("lstm_model.h5")
-logging.info("✅ Model berhasil disimpan sebagai 'lstm_model.h5'!")
+if __name__ == "__main__":
+    train_model()
