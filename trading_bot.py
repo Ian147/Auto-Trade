@@ -5,10 +5,7 @@ from binance.client import Client
 import joblib
 import time
 from data_fetcher import get_binance_ohlcv
-
-# API Key Binance
-API_KEY = "your_api_key"
-API_SECRET = "your_api_secret"
+from config import API_KEY, API_SECRET
 
 # Load model dan scaler
 MODEL_PATH = "lstm_model.h5"
@@ -20,7 +17,7 @@ scaler = joblib.load(SCALER_PATH)
 client = Client(API_KEY, API_SECRET)
 
 def predict_next_close():
-    df = get_binance_ohlcv("BTCUSDT", "15m", 60)  # Ambil 60 data terakhir
+    df = get_binance_ohlcv("BTCUSDT", "15m", 60)  
     if df is None:
         return None
 
