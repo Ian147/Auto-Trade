@@ -1,40 +1,46 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+import requests
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from sklearn.preprocessing import MinMaxScaler
-from config import DATA_PATH, MODEL_PATH, SCALER_PATH
+from binance.client import Client
+from config import *
 
-df = pd.read_csv(DATA_PATH)
-df['timestamp'] = pd.to_datetime(df['timestamp'])
+client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+model = tf.keras.models.load_model(MODEL_PATH)
+scaler = np.load(SCALER_PATH, allow_pickle=True)
 
-scaler = MinMaxScaler()
-df[['open', 'high', 'low', 'close', 'volume']] = scaler.fit_transform(df[['open', 'high', 'low', 'close', 'volume']])
-np.save(SCALER_PATH, scaler)
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    requests.post(url, data=data)
 
-X, y = [], []
-sequence_length = 60
+def fetch_latest_data():
+    klines = client.get_klines(symbol=PAIR, interval=TIMEFRAME, limit=60)
+    df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 
+                                       'close_time', 'quote_asset_volume', 'number_of_trades', 
+                                       'taker_buy_base', 'taker_buy_quote', 'ignore'])
+    df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    return scaler.transform(df.values)
 
-for i in range(len(df) - sequence_length):
-    X.append(df[['open', 'high', 'low', 'close', 'volume']].iloc[i:i+sequence_length].values)
-    y.append(df['close'].iloc[i+sequence_length])
+def predict_price():
+    X_input = fetch_latest_data()
+    X_input = np.expand_dims(X_input, axis=0)
+    return model.predict(X_input)[0][0]
 
-X, y = np.array(X), np.array(y)
+def trade():
+    prediction = predict_price()
+    last_price = float(client.get_symbol_ticker(symbol=PAIR)['price'])
+    
+    if prediction > last_price * (1 + TP_PERCENT / 100):
+        order = client.order_market_buy(symbol=PAIR, quoteOrderQty=TRADE_AMOUNT_USDT)
+        send_telegram_message(f"✅ BUY Order: {order}")
+    
+    elif prediction < last_price * (1 - SL_PERCENT / 100):
+        balance = client.get_asset_balance(asset="BTC")
+        if float(balance['free']) > 0:
+            order = client.order_market_sell(symbol=PAIR, quantity=float(balance['free']))
+            send_telegram_message(f"❌ SELL Order: {order}")
 
-split = int(0.8 * len(X))
-X_train, y_train = X[:split], y[:split]
-X_test, y_test = X[split:], y[split:]
-
-model = Sequential([
-    LSTM(50, return_sequences=True, input_shape=(sequence_length, 5)),
-    LSTM(50, return_sequences=False),
-    Dense(25, activation='relu'),
-    Dense(1)
-])
-
-model.compile(optimizer='adam', loss='mse')
-model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=100, batch_size=64)
-
-model.save(MODEL_PATH)
-print("✅ Model disimpan sebagai", MODEL_PATH)
+while True:
+    trade()
+    time.sleep(900)
