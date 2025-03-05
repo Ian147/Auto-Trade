@@ -1,76 +1,56 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
-import logging
+import joblib
 
-# Konfigurasi logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-# Load data
 DATA_PATH = "data.csv"
+MODEL_PATH = "lstm_model.h5"
+
+# Baca data
 df = pd.read_csv(DATA_PATH)
-
-# Pastikan dataset memiliki setidaknya 250.000 baris
-if len(df) < 250000:
-    logging.error(f"❌ Dataset hanya memiliki {len(df)} baris, minimal 250.000 diperlukan!")
-    exit()
-
-# Konversi timestamp ke datetime
 df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-# Gunakan hanya 250.000 data terakhir
-df = df.tail(250000)
+df.set_index("timestamp", inplace=True)
 
 # Normalisasi data
-scaler = MinMaxScaler(feature_range=(0, 1))
-df_scaled = scaler.fit_transform(df[["open", "high", "low", "close", "volume"]])
+scaler = MinMaxScaler()
+scaled_data = scaler.fit_transform(df[["open", "high", "low", "close", "volume"]])
 
-# Simpan scaler untuk digunakan saat prediksi
-np.save("scaler.npy", scaler)
+# Simpan scaler
+joblib.dump(scaler, "scaler.pkl")
 
-# Persiapan data untuk LSTM
-def create_sequences(data, seq_length=50):
-    X, y = [], []
-    for i in range(len(data) - seq_length):
-        X.append(data[i : i + seq_length])
-        y.append(data[i + seq_length, 3])  # Target adalah "close"
-    return np.array(X), np.array(y)
+# Persiapan dataset
+SEQ_LEN = 60  # 60 candle terakhir untuk prediksi
+X, y = [], []
+for i in range(len(scaled_data) - SEQ_LEN):
+    X.append(scaled_data[i:i + SEQ_LEN])
+    y.append(scaled_data[i + SEQ_LEN, 3])  # Prediksi harga close
 
-SEQ_LENGTH = 50  # Gunakan 50 candle terakhir untuk prediksi
-X, y = create_sequences(df_scaled, SEQ_LENGTH)
+X, y = np.array(X), np.array(y)
 
-# Split data menjadi training (80%) dan testing (20%)
-split = int(len(X) * 0.8)
+# Bagi dataset
+split = int(0.8 * len(X))
 X_train, X_test = X[:split], X[split:]
 y_train, y_test = y[:split], y[split:]
 
-logging.info(f"📊 Data Latih: {X_train.shape}, Data Uji: {X_test.shape}")
-
-# Membangun model LSTM
+# Model LSTM
 model = Sequential([
-    LSTM(64, return_sequences=True, input_shape=(SEQ_LENGTH, X.shape[2])),
+    LSTM(50, return_sequences=True, input_shape=(SEQ_LEN, X.shape[2])),
     Dropout(0.2),
-    LSTM(64, return_sequences=False),
+    LSTM(50, return_sequences=False),
     Dropout(0.2),
-    Dense(32, activation="relu"),
-    Dense(1)  # Output satu angka (harga close berikutnya)
+    Dense(25),
+    Dense(1)
 ])
 
-# Kompilasi model
-model.compile(optimizer="adam", loss="mse")
+model.compile(optimizer="adam", loss="mean_squared_error")
 
-# Melatih model
-logging.info("🚀 Mulai melatih model...")
-EPOCHS = 100
-BATCH_SIZE = 64
-
-history = model.fit(X_train, y_train, epochs=EPOCHS, batch_size=BATCH_SIZE,
-                    validation_data=(X_test, y_test), verbose=1)
+# Latih model
+model.fit(X_train, y_train, epochs=100, batch_size=64, validation_data=(X_test, y_test))
 
 # Simpan model
-model.save("lstm_model.h5")
-logging.info("✅ Model berhasil disimpan sebagai 'lstm_model.h5'")
+model.save(MODEL_PATH)
+print("✅ Model berhasil disimpan!")
