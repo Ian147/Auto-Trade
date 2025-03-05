@@ -1,87 +1,71 @@
 import numpy as np
 import pandas as pd
-import joblib
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
-import logging
-import os
+import joblib
 
-# Konfigurasi Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Konstanta
-DATA_PATH = "data.csv"  # Path dataset
-MODEL_PATH = "lstm_model.h5"  # Path model yang disimpan
-SCALER_PATH = "scaler.pkl"  # Path scaler yang disimpan
-EPOCHS = 100  # Jumlah epoch pelatihan
-BATCH_SIZE = 64  # Batch size untuk training
-SEQ_LENGTH = 50  # Jumlah langkah dalam input LSTM
-TRAIN_SIZE = 250000  # Gunakan 250k data
-
-# ✅ 1. Muat Data
-logger.info("📥 Memuat data...")
+# ✅ Load dataset
+DATA_PATH = "data.csv"
 df = pd.read_csv(DATA_PATH)
 
-# Pastikan dataset cukup besar
-if len(df) < TRAIN_SIZE:
-    raise ValueError(f"❌ Dataset hanya memiliki {len(df)} baris, minimal {TRAIN_SIZE} baris diperlukan!")
+# ✅ Pastikan dataset cukup besar
+if len(df) < 250000:
+    raise ValueError(f"Dataset hanya memiliki {len(df)} data! Tambahkan lebih banyak data.")
 
-# Konversi timestamp
+# ✅ Konversi timestamp & pilih fitur
 df['timestamp'] = pd.to_datetime(df['timestamp'])
 df.set_index('timestamp', inplace=True)
+df = df[['open', 'high', 'low', 'close', 'volume']]
 
-# Gunakan hanya TRAIN_SIZE data terakhir
-df = df.iloc[-TRAIN_SIZE:]
-
-# Pilih fitur yang akan digunakan
-features = ["open", "high", "low", "close", "volume"]
-data = df[features].values
-
-# ✅ 2. Normalisasi Data
+# ✅ Normalisasi data
 scaler = MinMaxScaler(feature_range=(0, 1))
-data_scaled = scaler.fit_transform(data)
+scaled_data = scaler.fit_transform(df)
 
-# Simpan scaler
-joblib.dump(scaler, SCALER_PATH)
-logger.info(f"✅ Scaler disimpan: {SCALER_PATH}")
+# ✅ Simpan scaler
+joblib.dump(scaler, "scaler.pkl")
 
-# ✅ 3. Buat Dataset LSTM
-def create_sequences(data, seq_length):
+# ✅ Buat dataset untuk LSTM
+def create_sequences(data, seq_length=60):
     X, y = [], []
     for i in range(len(data) - seq_length):
         X.append(data[i:i + seq_length])
-        y.append(data[i + seq_length, 3])  # Target: harga close berikutnya
+        y.append(data[i + seq_length, 3])  # Prediksi harga 'close'
     return np.array(X), np.array(y)
 
-X, y = create_sequences(data_scaled, SEQ_LENGTH)
+SEQ_LENGTH = 60
+X, y = create_sequences(scaled_data, SEQ_LENGTH)
 
-# Split dataset (80% training, 20% validation)
-split = int(0.8 * len(X))
-X_train, y_train = X[:split], y[:split]
-X_val, y_val = X[split:], y[split:]
+# ✅ Split data
+split = int(len(X) * 0.8)
+X_train, X_test = X[:split], X[split:]
+y_train, y_test = y[:split], y[split:]
 
-logger.info(f"📊 Dataset: Train {X_train.shape}, Validation {X_val.shape}")
-
-# ✅ 4. Bangun Model LSTM
+# ✅ Bangun model LSTM
 model = Sequential([
-    LSTM(64, return_sequences=True, input_shape=(SEQ_LENGTH, len(features))),
+    LSTM(64, return_sequences=True, input_shape=(SEQ_LENGTH, 5)),
     Dropout(0.2),
     LSTM(64, return_sequences=False),
     Dropout(0.2),
     Dense(32, activation="relu"),
-    Dense(1)  # Prediksi harga close
+    Dense(1)
 ])
 
-model.compile(optimizer="adam", loss="mse")
-model.summary()
+# ✅ Register custom loss untuk menghindari error
+@tf.keras.utils.register_keras_serializable()
+def custom_loss():
+    return tf.keras.losses.MeanSquaredError()
 
-# ✅ 5. Latih Model
-logger.info("🚀 Mulai melatih model...")
-history = model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=EPOCHS, batch_size=BATCH_SIZE)
+model.compile(optimizer="adam", loss=custom_loss())
 
-# ✅ 6. Simpan Model
-model.save(MODEL_PATH)
-logger.info(f"✅ Model berhasil disimpan sebagai '{MODEL_PATH}'")
+# ✅ Train model
+EPOCHS = 100
+BATCH_SIZE = 64
+
+model.fit(X_train, y_train, epochs=EPOCHS, batch_size=BATCH_SIZE, validation_data=(X_test, y_test))
+
+# ✅ Simpan model
+model.save("lstm_model.h5")
+
+print("✅ Model selesai dilatih & disimpan sebagai 'lstm_model.h5'")
