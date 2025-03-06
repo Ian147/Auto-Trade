@@ -19,7 +19,7 @@ def fetch_historical_data():
     last_timestamp = None  # Untuk mengambil data mundur
 
     print(f"📥 Mengunduh {TOTAL_DATA} data OHLCV untuk {PAIR}...")
-    
+
     while len(all_data) < TOTAL_DATA:
         try:
             # Ambil data dari Binance
@@ -34,8 +34,15 @@ def fetch_historical_data():
                 print("✅ Tidak ada data lagi.")
                 break
 
-            # Format data ke DataFrame
-            df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            # Format data ke DataFrame (Hanya 6 kolom pertama yang diambil)
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_asset_volume', 'trades', 
+                'taker_base_volume', 'taker_quote_volume', 'ignore'
+            ])
+            
+            # Hanya gunakan 6 kolom pertama
+            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
             all_data.extend(df.values.tolist())
