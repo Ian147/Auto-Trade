@@ -7,13 +7,9 @@ from config import *
 import requests
 
 # Load model & scaler
-try:
-    model = tf.keras.models.load_model("lstm_model.h5", custom_objects={"mse": tf.keras.losses.MeanSquaredError()})
-except TypeError:
-    model = tf.keras.models.load_model("lstm_model.h5", compile=False)
-    model.compile(loss="mse", optimizer="adam")  # Kompile ulang model jika perlu
-
+model = tf.keras.models.load_model("lstm_model.h5")
 scaler = joblib.load("scaler.pkl")
+
 client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 
 def fetch_latest_data():
@@ -36,18 +32,21 @@ def trade():
     predicted_price = predict_price()
     last_price = float(client.get_symbol_ticker(symbol=PAIR)["price"])
 
-    TP = last_price * 1.015  # TP = +1.5%
-    SL = last_price * 0.95   # SL = -5%
+    TP = last_price * 1.015  # TP 1.5%
+    SL = last_price * 0.95   # SL 5%
 
     if predicted_price > TP:  # BUY Order
         order = client.order_market_buy(symbol=PAIR, quoteOrderQty=TRADE_AMOUNT_USDT)
         send_telegram_message(f"📈 BUY Order Executed at {last_price}")
 
-    elif predicted_price < SL:  # SELL Order (Sell All BTC)
-        balance = float(client.get_asset_balance(asset="BTC")["free"])
+    elif predicted_price < SL:  # SELL Order
+        balance = client.get_asset_balance(asset="BTC")["free"]
+        balance = float(balance)
+
         if balance > 0:
+            balance = round(balance, 6)  # Pastikan jumlah BTC valid (6 desimal)
             order = client.order_market_sell(symbol=PAIR, quantity=balance)
-            send_telegram_message(f"📉 SELL Order Executed at {last_price}, Sold {balance} BTC")
+            send_telegram_message(f"📉 SELL Order Executed at {last_price}")
 
 if __name__ == "__main__":
     trade()
