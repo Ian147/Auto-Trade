@@ -5,9 +5,18 @@ import tensorflow as tf
 from binance.client import Client
 from config import *
 import requests
+import logging
 
-# Load model & scaler
-model = tf.keras.models.load_model("lstm_model.h5")
+# Setup logging
+logging.basicConfig(filename="bot.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Load model & scaler dengan custom_objects untuk menghindari error 'mse'
+try:
+    model = tf.keras.models.load_model("lstm_model.h5", custom_objects={"mse": tf.keras.losses.MeanSquaredError()})
+except TypeError:
+    model = tf.keras.models.load_model("lstm_model.h5", compile=False)
+    model.compile(loss="mse", optimizer="adam")  # Kompile ulang model jika perlu
+
 scaler = joblib.load("scaler.pkl")
 
 client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
@@ -20,48 +29,52 @@ def fetch_latest_data():
     return np.array([close_prices])
 
 def predict_price():
-    """Memprediksi harga dengan model AI."""
+    """Memprediksi harga berdasarkan model AI."""
     X_input = fetch_latest_data()
     prediction = model.predict(X_input)
     return scaler.inverse_transform(prediction)[0][0]
 
 def send_telegram_message(message):
-    """Mengirim notifikasi ke Telegram."""
+    """Mengirim pesan ke Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     requests.post(url, json=payload)
 
-def get_lot_size():
-    """Mendapatkan aturan LOT_SIZE dari Binance."""
-    exchange_info = client.get_symbol_info(PAIR)
-    for f in exchange_info["filters"]:
-        if f["filterType"] == "LOT_SIZE":
-            return float(f["stepSize"]), float(f["minQty"])
-
 def round_lot_size(quantity, step_size):
-    """Membulatkan jumlah ke step_size terdekat."""
-    return round(quantity / step_size) * step_size
+    """Menyesuaikan jumlah order agar sesuai dengan aturan LOT_SIZE Binance."""
+    return round(quantity // step_size * step_size, len(str(step_size).split(".")[1]) if "." in str(step_size) else 0)
 
 def trade():
-    """Eksekusi trading berdasarkan prediksi AI."""
+    """Fungsi utama untuk trading berdasarkan prediksi AI."""
     predicted_price = predict_price()
     last_price = float(client.get_symbol_ticker(symbol=PAIR)["price"])
 
-    TP = last_price * 1.015  # Take Profit 1.5%
-    SL = last_price * 0.95   # Stop Loss 5%
+    TP = last_price * 1.015  # +1.5% dari harga saat ini
+    SL = last_price * 0.95   # -5% dari harga saat ini
 
-    step_size, min_qty = get_lot_size()
+    logging.info(f"Last Price: {last_price}, Predicted Price: {predicted_price}, TP: {TP}, SL: {SL}")
 
     if predicted_price >= TP:  # **Kondisi BUY**
-        buy_order = client.order_market_buy(symbol=PAIR, quoteOrderQty=TRADE_AMOUNT_USDT)
+        order = client.order_market_buy(symbol=PAIR, quoteOrderQty=TRADE_AMOUNT_USDT)
         send_telegram_message(f"📈 BUY Order Executed at {last_price}")
+        logging.info(f"BUY Order Executed at {last_price}")
 
     elif predicted_price <= SL:  # **Kondisi SELL**
         balance = float(client.get_asset_balance(asset="BTC")["free"])
-        if balance > min_qty:
-            sell_quantity = round_lot_size(balance, step_size)  # **Agar sesuai LOT_SIZE**
-            client.order_market_sell(symbol=PAIR, quantity=sell_quantity)
-            send_telegram_message(f"📉 SELL Order Executed at {last_price}")
+
+        # Pastikan balance tidak 0 sebelum SELL
+        if balance > 0:
+            # Dapatkan aturan LOT_SIZE Binance untuk pembulatan jumlah BTC
+            exchange_info = client.get_symbol_info(PAIR)
+            step_size = float([f for f in exchange_info["filters"] if f["filterType"] == "LOT_SIZE"][0]["stepSize"])
+            qty_to_sell = round_lot_size(balance, step_size)
+
+            if qty_to_sell > 0:
+                client.order_market_sell(symbol=PAIR, quantity=qty_to_sell)
+                send_telegram_message(f"📉 SELL Order Executed at {last_price}")
+                logging.info(f"SELL Order Executed at {last_price}")
+            else:
+                logging.warning("SELL Order failed: Lot size too small")
 
 if __name__ == "__main__":
     trade()
