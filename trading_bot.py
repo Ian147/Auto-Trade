@@ -10,7 +10,7 @@ import logging
 # Setup logging
 logging.basicConfig(level=logging.INFO, filename='bot.log', format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Load model & scaler dengan custom_objects untuk menghindari error 'mse'
+# Load model & scaler
 try:
     model = tf.keras.models.load_model("lstm_model.h5", custom_objects={"mse": tf.keras.losses.MeanSquaredError()})
 except TypeError:
@@ -53,30 +53,34 @@ def trade():
 
     logging.info(f"Last Price: {last_price}, Predicted Price: {predicted_price}, TP: {TP}, SL: {SL}")
 
-    # Get the minimum order quantity for the pair
-    min_qty = get_min_order_quantity(PAIR)
-    if min_qty is None:
-        logging.error("Failed to get minimum order quantity for the pair")
-        return
-
-    # If predicted price is greater than the target TP
-    if predicted_price > TP:  
+    # If predicted price is greater than the target TP (BUY Signal)
+    if predicted_price > last_price:
+        # Market Buy 10 USDT worth of BTC
         order = client.order_market_buy(symbol=PAIR, quoteOrderQty=TRADE_AMOUNT_USDT)
         send_telegram_message(f"📈 BUY Order Executed at {last_price}\n🔼 TP: {TP}\n🔻 SL: {SL}")
         logging.info(f"BUY Order Executed at {last_price}, TP: {TP}, SL: {SL}")
-
-    # If predicted price is less than the stop loss SL
-    elif predicted_price < SL:
-        balance = client.get_asset_balance(asset="BTC")["free"]
-        balance = float(balance)
-
-        # Check if balance is enough to meet the minimum order quantity
-        if balance >= min_qty:
-            order = client.order_market_sell(symbol=PAIR, quantity=balance)
-            send_telegram_message(f"📉 SELL Order Executed at {last_price}\n🎯 TP Reached at {TP}")
-            logging.info(f"SELL Order Executed at {last_price}, TP Reached at {TP}")
-        else:
-            logging.warning(f"Not enough BTC to meet minimum sell quantity ({min_qty}). Current balance: {balance}")
+        
+        # Monitor for TP or SL to trigger SELL
+        while True:
+            current_price = float(client.get_symbol_ticker(symbol=PAIR)["price"])
+            if current_price >= TP:  # TP reached
+                balance = client.get_asset_balance(asset="BTC")["free"]
+                balance = float(balance)
+                if balance > 0:
+                    # Sell all BTC at market price when TP is reached
+                    order = client.order_market_sell(symbol=PAIR, quantity=balance)
+                    send_telegram_message(f"🎯 TP Reached: SELL Order Executed at {current_price}\n📊 Profit: {TP - last_price}")
+                    logging.info(f"SELL Order Executed at {current_price}, Profit: {current_price - last_price}")
+                break
+            elif current_price <= SL:  # SL reached
+                balance = client.get_asset_balance(asset="BTC")["free"]
+                balance = float(balance)
+                if balance > 0:
+                    # Sell all BTC at market price when SL is hit
+                    order = client.order_market_sell(symbol=PAIR, quantity=balance)
+                    send_telegram_message(f"❌ SL Reached: SELL Order Executed at {current_price}\n📊 Loss: {last_price - SL}")
+                    logging.info(f"SELL Order Executed at {current_price}, Loss: {last_price - SL}")
+                break
 
 if __name__ == "__main__":
     trade()
