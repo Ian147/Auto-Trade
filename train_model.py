@@ -1,49 +1,51 @@
 import pandas as pd
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from sklearn.preprocessing import MinMaxScaler
 import joblib
+import tensorflow as tf
+from sklearn.preprocessing import MinMaxScaler
 
-# Load data
+# Load Data
 df = pd.read_csv("binance_ohlcv_15m.csv")
 df["close"] = df["close"].astype(float)
 
+# Cek jika dataset terlalu kecil
+if len(df) < 1000:
+    raise ValueError("Dataset terlalu kecil. Unduh lebih banyak data dengan `data_fetcher.py`.")
+
 # Normalisasi data
 scaler = MinMaxScaler(feature_range=(0, 1))
-df["close"] = scaler.fit_transform(df[["close"]])
+df_scaled = scaler.fit_transform(df[["close"]])
 
-joblib.dump(scaler, "scaler.pkl")  # Simpan scaler
+# Fungsi untuk menyiapkan dataset LSTM
+def create_dataset(data, time_step=50):
+    X, y = [], []
+    for i in range(len(data) - time_step):
+        X.append(data[i:(i + time_step), 0])
+        y.append(data[i + time_step, 0])
+    return np.array(X), np.array(y)
 
-# Membentuk dataset
-sequence_length = 50
-X, y = [], []
+# Buat dataset
+TIME_STEP = 50  # Panjang input sequence
+X, y = create_dataset(df_scaled, TIME_STEP)
+X = X.reshape(X.shape[0], X.shape[1], 1)
 
-for i in range(len(df) - sequence_length - 1):
-    X.append(df["close"].values[i:i+sequence_length])
-    y.append(df["close"].values[i+sequence_length])
-
-X, y = np.array(X), np.array(y)
-
-# Split dataset
-split = int(0.8 * len(X))
-X_train, y_train = X[:split], y[:split]
-X_test, y_test = X[split:], y[split:]
-
-# Model LSTM
-model = Sequential([
-    LSTM(50, return_sequences=True, input_shape=(sequence_length, 1)),
-    Dropout(0.2),
-    LSTM(50, return_sequences=False),
-    Dropout(0.2),
-    Dense(25),
-    Dense(1)
+# Bangun Model LSTM
+model = tf.keras.models.Sequential([
+    tf.keras.layers.LSTM(64, return_sequences=True, input_shape=(TIME_STEP, 1)),
+    tf.keras.layers.Dropout(0.2),  # Mencegah overfitting
+    tf.keras.layers.LSTM(64, return_sequences=False),
+    tf.keras.layers.Dropout(0.2),
+    tf.keras.layers.Dense(32, activation="relu"),
+    tf.keras.layers.Dense(1)
 ])
 
-model.compile(optimizer="adam", loss="mse")
-model.fit(X_train, y_train, epochs=100, batch_size=32, validation_data=(X_test, y_test))
+# Kompilasi Model
+model.compile(loss="mse", optimizer="adam")
 
-# Simpan model
+# Latih Model
+model.fit(X, y, epochs=100, batch_size=64, verbose=1, validation_split=0.2)
+
+# Simpan model & scaler
 model.save("lstm_model.h5")
-print("✅ Model berhasil disimpan!")
+joblib.dump(scaler, "scaler.pkl")
+print("✅ Model dan scaler berhasil disimpan!")
