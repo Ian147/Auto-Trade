@@ -37,6 +37,13 @@ def send_telegram_message(message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     requests.post(url, json=payload)
 
+def get_min_order_quantity(symbol):
+    exchange_info = client.get_symbol_info(symbol)
+    for filter in exchange_info['filters']:
+        if filter['filterType'] == 'LOT_SIZE':
+            return float(filter['minQty'])
+    return None
+
 def trade():
     predicted_price = predict_price()
     last_price = float(client.get_symbol_ticker(symbol=PAIR)["price"])
@@ -45,6 +52,12 @@ def trade():
     SL = last_price * (1 - SL_PERCENT / 100)  # Calculate SL price
 
     logging.info(f"Last Price: {last_price}, Predicted Price: {predicted_price}, TP: {TP}, SL: {SL}")
+
+    # Get the minimum order quantity for the pair
+    min_qty = get_min_order_quantity(PAIR)
+    if min_qty is None:
+        logging.error("Failed to get minimum order quantity for the pair")
+        return
 
     # If predicted price is greater than the target TP
     if predicted_price > TP:  
@@ -55,10 +68,15 @@ def trade():
     # If predicted price is less than the stop loss SL
     elif predicted_price < SL:
         balance = client.get_asset_balance(asset="BTC")["free"]
-        if float(balance) > 0:
+        balance = float(balance)
+
+        # Check if balance is enough to meet the minimum order quantity
+        if balance >= min_qty:
             order = client.order_market_sell(symbol=PAIR, quantity=balance)
             send_telegram_message(f"📉 SELL Order Executed at {last_price}\n🎯 TP Reached at {TP}")
             logging.info(f"SELL Order Executed at {last_price}, TP Reached at {TP}")
+        else:
+            logging.warning(f"Not enough BTC to meet minimum sell quantity ({min_qty}). Current balance: {balance}")
 
 if __name__ == "__main__":
     trade()
