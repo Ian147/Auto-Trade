@@ -17,7 +17,7 @@ client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 
 # Muat model LSTM
 try:
-    model = load_model("lstm_model.h5")
+    model = load_model("lstm_model.h5", custom_objects={"mse": tf.keras.losses.MeanSquaredError()})
     logging.info("✅ Model LSTM berhasil dimuat!")
 except Exception as e:
     logging.error(f"❌ Gagal memuat model: {e}")
