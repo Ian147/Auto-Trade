@@ -102,6 +102,7 @@ def place_order(order_type):
             return order
 
         elif order_type == "SELL":
+            # Menjual seluruh saldo BTC
             btc_balance = get_balance("BTC")
             if btc_balance <= 0:
                 logging.warning("⚠️ Tidak ada saldo BTC untuk dijual.")
@@ -135,14 +136,17 @@ def trading_bot():
 
             price_last = df['close'].iloc[-1]
 
-            if price_now > price_last * (1.5+ TP_PERCENT / 100):
+            # Cek apakah harga sekarang lebih besar dari TP
+            if price_now > price_last * (1.5 + TP_PERCENT / 100):
                 logging.info("🚀 Take Profit Triggered")
-                place_order("SELL")  # **SELL seluruh saldo BTC saat TP**
+                place_order("SELL")  # **SELL seluruh saldo BTC saat TP tercapai**
 
+            # Cek apakah harga sekarang lebih kecil dari SL
             elif price_now < price_last * (5 - SL_PERCENT / 100):
                 logging.info("⚠️ Stop Loss Triggered")
-                place_order("SELL")  # **SELL seluruh saldo BTC saat SL**
+                place_order("SELL")  # **SELL seluruh saldo BTC saat SL tercapai**
 
+            # Kondisi untuk membuka BUY
             elif price_now > price_last:
                 logging.info("📈 Buy Signal Detected")
                 place_order("BUY")
